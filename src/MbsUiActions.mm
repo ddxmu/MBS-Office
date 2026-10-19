@@ -319,11 +319,12 @@ static void InstallMbsLoginMouseMonitor(void) {
             NSView *content=window.contentView;
             NSPoint point=event.locationInWindow;
             NSRect bounds=content ? content.bounds : NSZeroRect;
-            if ([window.title isEqualToString:@"首页"] && bounds.size.width > 600 && bounds.size.height > 300) {
+            if (bounds.size.width > 600 && bounds.size.height > 300) {
                 CGFloat xRatio = point.x / bounds.size.width;
                 CGFloat yRatio = point.y / bounds.size.height;
-                BOOL bottomUpgrade = xRatio >= 0.05 && xRatio <= 0.30 && yRatio <= 0.12;
-                BOOL topUpgrade = xRatio >= 0.55 && xRatio <= 0.82 && yRatio >= 0.86;
+                BOOL isHome = [window.title isEqualToString:@"首页"];
+                BOOL bottomUpgrade = isHome && xRatio >= 0.05 && xRatio <= 0.30 && yRatio <= 0.12;
+                BOOL topUpgrade = xRatio >= 0.70 && xRatio <= 0.86 && yRatio >= 0.88;
                 if (bottomUpgrade || topUpgrade) {
                     MbsShowUpdates();
                     return (NSEvent *)nil;
