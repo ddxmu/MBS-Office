@@ -6,6 +6,9 @@ extern "C" {
 void MbsShowLocalAccount(void);
 // Does not grant, alter, or represent WPS subscription entitlements.
 const char *MbsLocalAccountCapabilities(void);
+// Caller owns this UTF-8 JSON buffer and must free() it. No password is returned.
+char *MbsCopyLocalAccountState(void);
+void MbsLocalAccountSignOut(void);
 #ifdef __cplusplus
 }
 #endif

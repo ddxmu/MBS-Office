@@ -122,14 +122,16 @@ static BOOL SameHash(NSData *left, NSData *right) {
 @interface MbsLocalAccountController : NSObject
 @property(nonatomic, strong) NSWindow *window;
 @property(nonatomic, strong) NSSegmentedControl *mode;
-@property(nonatomic, strong) NSTextField *email, *status, *confirmLabel;
-@property(nonatomic, strong) NSSecureTextField *password, *confirm;
+@property(nonatomic, strong) NSTextField *email, *status;
+@property(nonatomic, strong) NSSecureTextField *password;
 @property(nonatomic, strong) NSButton *submit, *logout;
 @property(nonatomic, strong) MbsLocalAccountStore *store;
 @property(nonatomic, strong) dispatch_queue_t queue;
 @property(nonatomic, copy) NSString *sessionEmail;
 + (instancetype)shared;
 - (void)show;
+- (void)authenticatedEmail:(NSString *)email;
+- (void)logout:(id)sender;
 @end
 
 static NSTextField *AccountLabel(NSView *view, NSString *text, NSRect frame) {
@@ -173,9 +175,6 @@ static NSTextField *AccountLabel(NSView *view, NSString *text, NSRect frame) {
         self.password = [[NSSecureTextField alloc] initWithFrame:NSMakeRect(121, 222, 425, 28)];
         self.password.placeholderString = @"至少 8 个字符";
         [view addSubview:self.password];
-        self.confirmLabel = AccountLabel(view, @"确认密码", NSMakeRect(24, 183, 90, 24));
-        self.confirm = [[NSSecureTextField alloc] initWithFrame:NSMakeRect(121, 179, 425, 28)];
-        [view addSubview:self.confirm];
         self.status = AccountLabel(view, @"未登录。账号仅用于本机，退出应用后需要重新登录。", NSMakeRect(24, 75, 522, 87));
         self.submit = [NSButton buttonWithTitle:@"登录" target:self action:@selector(submit:)];
         self.submit.frame = NSMakeRect(422, 24, 124, 32);
@@ -193,9 +192,6 @@ static NSTextField *AccountLabel(NSView *view, NSString *text, NSRect frame) {
 }
 - (void)changeMode:(id)sender {
     BOOL registering = self.mode.selectedSegment == 1;
-    self.confirm.hidden = !registering;
-    self.confirmLabel.hidden = !registering;
-    self.confirm.stringValue = @"";
     self.submit.title = registering ? @"注册并登录" : @"登录";
 }
 - (void)setBusy:(BOOL)busy {
@@ -203,7 +199,6 @@ static NSTextField *AccountLabel(NSView *view, NSString *text, NSRect frame) {
     self.mode.enabled = !busy;
     self.email.enabled = !busy;
     self.password.enabled = !busy;
-    self.confirm.enabled = !busy;
     self.logout.enabled = !busy && self.sessionEmail.length > 0;
 }
 - (void)submit:(id)sender {
@@ -211,9 +206,7 @@ static NSTextField *AccountLabel(NSView *view, NSString *text, NSRect frame) {
     NSString *email = NormalizedEmail(self.email.stringValue), *password = self.password.stringValue;
     if (!ValidEmail(email)) { self.status.stringValue = @"请输入有效的邮箱地址。"; return; }
     if (registering && !ValidPassword(password)) { self.status.stringValue = @"密码至少需要 8 个字符。"; return; }
-    if (registering && ![password isEqualToString:self.confirm.stringValue]) { self.status.stringValue = @"两次密码不一致，请重新输入。"; return; }
     self.password.stringValue = @"";
-    self.confirm.stringValue = @"";
     [self setBusy:YES];
     self.status.stringValue = registering ? @"正在安全保存本机账号…" : @"正在验证本机账号…";
     dispatch_async(self.queue, ^{
@@ -221,19 +214,25 @@ static NSTextField *AccountLabel(NSView *view, NSString *text, NSRect frame) {
         dispatch_async(dispatch_get_main_queue(), ^{
             if (error) self.status.stringValue = error;
             else {
-                self.sessionEmail = email;
+                [self authenticatedEmail:email];
                 self.status.stringValue = [NSString stringWithFormat:@"已登录：%@\n仅本机有效，未连接服务器。退出应用后会结束本次登录。", email];
             }
             [self setBusy:NO];
         });
     });
 }
+- (void)authenticatedEmail:(NSString *)email {
+    self.sessionEmail = email;
+    [[NSNotificationCenter defaultCenter] postNotificationName:@"MbsLocalAccountDidChange" object:nil
+        userInfo:@{@"signedIn":@YES, @"email":email}];
+}
 - (void)logout:(id)sender {
     self.sessionEmail = nil;
     self.password.stringValue = @"";
-    self.confirm.stringValue = @"";
     self.logout.enabled = NO;
     self.status.stringValue = @"已退出本机登录。自研功能仍可免费使用。";
+    [[NSNotificationCenter defaultCenter] postNotificationName:@"MbsLocalAccountDidChange" object:nil
+        userInfo:@{@"signedIn":@NO}];
 }
 @end
 
@@ -242,4 +241,22 @@ void MbsShowLocalAccount(void) {
 }
 const char *MbsLocalAccountCapabilities(void) {
     return "{\"version\":1,\"localOnly\":true,\"session\":\"local_only_memory\",\"serverConnected\":false,\"accountRequired\":false,\"freeFeatures\":[\"custom_ai\",\"local_account\"],\"freeFeaturesScope\":\"Mbs self-developed features only\",\"changesWpsPaidEntitlements\":false}";
+}
+
+char *MbsCopyLocalAccountState(void) {
+    __block NSData *data;
+    void (^readState)(void) = ^{
+        NSString *email = [MbsLocalAccountController shared].sessionEmail;
+        NSDictionary *state = @{@"localOnly":@YES, @"signedIn":@(email.length > 0),
+            @"email":email ?: @"", @"membershipRequired":@NO,
+            @"allMbsFeaturesAvailable":@YES, @"vendorEntitlementsChanged":@NO};
+        data = [NSJSONSerialization dataWithJSONObject:state options:0 error:nil];
+    };
+    if (NSThread.isMainThread) readState(); else dispatch_sync(dispatch_get_main_queue(),readState);
+    char *result = (char *)calloc(data.length + 1,1);
+    if (result && data.length) memcpy(result,data.bytes,data.length);
+    return result;
+}
+void MbsLocalAccountSignOut(void) {
+    dispatch_async(dispatch_get_main_queue(), ^{ [[MbsLocalAccountController shared] logout:nil]; });
 }
