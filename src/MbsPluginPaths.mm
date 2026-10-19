@@ -45,11 +45,13 @@ static NSString *bundledAddon(NSString *value) {
     // Resolve only existing vendor addons within this bundle; never search the host.
     if (![value hasPrefix:@"/addons/"]) return nil;
     NSString *lower = value.lowercaseString;
+    // Keep the editor's account panel loadable so its own account lifecycle
+    // remains intact. Routing the Mbs header does not require blocking this addon.
     if ([lower hasPrefix:@"/addons/knewdocs/"] ||
-        [lower hasPrefix:@"/addons/kpromeaccountpanel/"] ||
         [lower hasPrefix:@"/addons/klingxidockpanel/"]) {
-        // Mbs owns the start page and account flow. Keep the editor core intact,
-        // but prevent legacy remote pages and the old robot assistant panel from loading.
+        // Mbs owns the start page and the assistant panel. Keep the editor core
+        // intact, but prevent the legacy remote page and the old robot assistant
+        // panel from loading.
         return @"/__mbs_disabled_remote_addon__";
     }
     NSString *base=[NSBundle.mainBundle.privateFrameworksPath stringByAppendingPathComponent:@"office6"];
@@ -62,7 +64,6 @@ static NSString *bundledResource(NSString *value) {
     if (![value hasPrefix:@"/addons/"]) return nil;
     NSString *lower = value.lowercaseString;
     if ([lower hasPrefix:@"/addons/knewdocs/"] ||
-        [lower hasPrefix:@"/addons/kpromeaccountpanel/"] ||
         [lower hasPrefix:@"/addons/klingxidockpanel/"]) {
         return @"/__mbs_disabled_remote_addon__";
     }

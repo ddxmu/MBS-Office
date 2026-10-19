@@ -2,6 +2,8 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
+// Validates a saved server session or presents the startup account window.
+void MbsStartAccountSession(void);
 // Presents the Mbs Office account window on the main queue.
 void MbsShowLocalAccount(void);
 // Describes the independent Mbs account service and self-developed features.

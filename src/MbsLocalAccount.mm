@@ -1,59 +1,68 @@
 #import <AppKit/AppKit.h>
-#import <Security/Security.h>
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
 #import "MbsLocalAccount.h"
 
 static NSString *MbsLoginURLString = @"https://ttys.ddxmu.com/api/mbs/login";
 static NSString *MbsLogoutURLString = @"https://ttys.ddxmu.com/api/mbs/logout";
 static NSString *MbsRegisterURLString = @"https://ttys.ddxmu.com/mbs/register";
 static NSString *MbsVipURLString = @"https://ttys.ddxmu.com/mbs/vip";
-static NSString *MbsRememberedCredentialsService = @"com.mbs.office.account";
-static NSString *MbsRememberedCredentialsAccount = @"remembered-login";
-
-static NSDictionary *MbsLoadRememberedCredentials(void) {
-    NSDictionary *query = @{
-        (__bridge id)kSecClass: (__bridge id)kSecClassGenericPassword,
-        (__bridge id)kSecAttrService: MbsRememberedCredentialsService,
-        (__bridge id)kSecAttrAccount: MbsRememberedCredentialsAccount,
-        (__bridge id)kSecReturnData: @YES,
-        (__bridge id)kSecMatchLimit: (__bridge id)kSecMatchLimitOne
-    };
-    CFTypeRef result = NULL;
-    OSStatus status = SecItemCopyMatching((__bridge CFDictionaryRef)query, &result);
-    if (status != errSecSuccess || !result) return nil;
-    NSData *data = CFBridgingRelease(result);
-    NSDictionary *credentials = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
-    return [credentials isKindOfClass:NSDictionary.class] ? credentials : nil;
-}
-
-static void MbsSaveRememberedCredentials(NSString *email, NSString *password) {
-    if (!email.length || !password.length) return;
-    NSData *data = [NSJSONSerialization dataWithJSONObject:@{ @"email": email, @"password": password }
-                                                         options:0 error:nil];
-    if (!data) return;
-    NSDictionary *query = @{
-        (__bridge id)kSecClass: (__bridge id)kSecClassGenericPassword,
-        (__bridge id)kSecAttrService: MbsRememberedCredentialsService,
-        (__bridge id)kSecAttrAccount: MbsRememberedCredentialsAccount
-    };
-    NSDictionary *attributes = @{
-        (__bridge id)kSecValueData: data,
-        (__bridge id)kSecAttrAccessible: (__bridge id)kSecAttrAccessibleAfterFirstUnlock
-    };
-    OSStatus status = SecItemUpdate((__bridge CFDictionaryRef)query, (__bridge CFDictionaryRef)attributes);
-    if (status == errSecItemNotFound) {
-        NSMutableDictionary *item = [query mutableCopy];
-        [item addEntriesFromDictionary:attributes];
-        SecItemAdd((__bridge CFDictionaryRef)item, NULL);
+// Store a revocable server session, never the account password. The private
+// directory and file are accessible only to the current macOS user.
+static int MbsAccountDirectory(void) {
+    NSString *path = [NSHomeDirectory() stringByAppendingPathComponent:@"Library/Application Support/Mbs Office/Account"];
+    if (![[NSFileManager defaultManager] createDirectoryAtPath:path withIntermediateDirectories:YES
+                                                  attributes:@{NSFilePosixPermissions: @0700} error:nil]) return -1;
+    int directory = open(path.fileSystemRepresentation, O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
+    struct stat info;
+    if (directory < 0) return -1;
+    if (fstat(directory, &info) || info.st_uid != getuid() || fchmod(directory, 0700)) {
+        close(directory);
+        return -1;
     }
+    return directory;
 }
 
-static void MbsDeleteRememberedCredentials(void) {
-    NSDictionary *query = @{
-        (__bridge id)kSecClass: (__bridge id)kSecClassGenericPassword,
-        (__bridge id)kSecAttrService: MbsRememberedCredentialsService,
-        (__bridge id)kSecAttrAccount: MbsRememberedCredentialsAccount
-    };
-    SecItemDelete((__bridge CFDictionaryRef)query);
+static NSDictionary *MbsLoadSession(void) {
+    int directory = MbsAccountDirectory();
+    if (directory < 0) return nil;
+    int file = openat(directory, "session.json", O_RDONLY | O_NOFOLLOW | O_NONBLOCK);
+    close(directory);
+    if (file < 0) return nil;
+    struct stat info;
+    char bytes[4096];
+    ssize_t count = -1;
+    if (!fstat(file, &info) && S_ISREG(info.st_mode) && info.st_uid == getuid() &&
+        !(info.st_mode & 0077) && info.st_size > 0 && info.st_size < sizeof(bytes)) {
+        count = read(file, bytes, sizeof(bytes));
+    }
+    close(file);
+    if (count <= 0) return nil;
+    id value = [NSJSONSerialization JSONObjectWithData:[NSData dataWithBytes:bytes length:count] options:0 error:nil];
+    return [value isKindOfClass:NSDictionary.class] ? value : nil;
+}
+
+static BOOL MbsSaveSession(NSString *email, NSString *token) {
+    NSData *data = [NSJSONSerialization dataWithJSONObject:@{@"email": email, @"token": token} options:0 error:nil];
+    int directory = MbsAccountDirectory();
+    if (directory < 0) return NO;
+    if (!data) { close(directory); return NO; }
+    NSString *temporary = [NSString stringWithFormat:@"session-%@.tmp", NSUUID.UUID.UUIDString];
+    int file = openat(directory, temporary.UTF8String, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0600);
+    BOOL saved = file >= 0 && write(file, data.bytes, data.length) == (ssize_t)data.length && fsync(file) == 0;
+    if (file >= 0) close(file);
+    if (saved) saved = renameat(directory, temporary.UTF8String, directory, "session.json") == 0;
+    unlinkat(directory, temporary.UTF8String, 0);
+    close(directory);
+    return saved;
+}
+
+static void MbsDeleteSession(void) {
+    int directory = MbsAccountDirectory();
+    if (directory < 0) return;
+    unlinkat(directory, "session.json", 0);
+    close(directory);
 }
 
 static NSString *NormalizedEmail(NSString *email) {
@@ -177,6 +186,7 @@ willPerformHTTPRedirection:(NSHTTPURLResponse *)response
 @property(nonatomic, strong) NSButton *submit;
 @property(nonatomic, strong) NSButton *logout;
 @property(nonatomic, strong) NSButton *remember;
+@property(nonatomic, strong) NSDate *lastWebLogin;
 @property(nonatomic, copy) NSString *sessionEmail;
 @property(nonatomic, copy) NSString *sessionToken;
 @property(nonatomic, strong) NSURLSession *session;
@@ -187,6 +197,8 @@ willPerformHTTPRedirection:(NSHTTPURLResponse *)response
 @property(nonatomic, strong) NSTextField *statusView;
 @property(nonatomic, strong) NSTimer *statusDismissTimer;
 @property(nonatomic, assign) BOOL vip;
+/// 服务端下发的免费额度上限；仅约束 Mbs 自有 AI 功能。
+@property(nonatomic, assign) NSInteger dailyFreeLimit;
 @property(nonatomic, copy) NSString *membershipLabel;
 @property(nonatomic, strong) NSPanel *accountPanel;
 @property(nonatomic, strong) NSTextField *accountPanelEmail;
@@ -197,9 +209,11 @@ willPerformHTTPRedirection:(NSHTTPURLResponse *)response
 @property(nonatomic, strong) NSTimer *membershipTimer;
 @property(nonatomic, strong) NSURLSessionDataTask *membershipTask;
 @property(nonatomic, strong) NSDate *membershipLastRefresh;
+@property(nonatomic, assign) BOOL restoringSession;
 + (instancetype)shared;
 - (void)show;
-- (void)restoreRememberedCredentials;
+- (void)startSession;
+- (void)didSignInWithToken:(NSString *)token user:(NSDictionary *)user notify:(BOOL)notify;
 - (void)submit:(id)sender;
 - (void)changeMode:(id)sender;
 - (void)logout:(id)sender;
@@ -207,6 +221,7 @@ willPerformHTTPRedirection:(NSHTTPURLResponse *)response
 - (void)showAccountPopoverForWindow:(NSWindow *)window point:(NSPoint)point;
 - (void)hideAccountPopover;
 - (void)openVip:(id)sender;
+- (void)openWebLogin:(id)sender;
 - (void)postAccountChange;
 @end
 
@@ -224,18 +239,73 @@ static NSTextField *AccountLabel(NSView *view, NSString *text, NSRect frame) {
     static dispatch_once_t once;
     dispatch_once(&once, ^{
         controller = [MbsLocalAccountController new];
+        controller.dailyFreeLimit = 3;
     });
     return controller;
 }
 
-- (void)restoreRememberedCredentials {
-    if (!self.email || !self.password || !self.remember) return;
-    NSDictionary *saved = MbsLoadRememberedCredentials();
-    NSString *savedEmail = [saved[@"email"] isKindOfClass:NSString.class] ? saved[@"email"] : nil;
-    NSString *savedPassword = [saved[@"password"] isKindOfClass:NSString.class] ? saved[@"password"] : nil;
-    if (savedEmail.length && !self.email.stringValue.length) self.email.stringValue = savedEmail;
-    if (savedPassword.length && !self.password.stringValue.length) self.password.stringValue = savedPassword;
-    if (savedEmail.length && savedPassword.length) self.remember.state = NSControlStateValueOn;
+- (void)startSession {
+    NSDictionary *saved = MbsLoadSession();
+    NSString *token = [saved[@"token"] isKindOfClass:NSString.class] ? saved[@"token"] : nil;
+    NSString *email = [saved[@"email"] isKindOfClass:NSString.class] ? saved[@"email"] : nil;
+    if (token.length < 32 || token.length > 128 || !ValidEmail(email)) {
+        MbsDeleteSession();
+        [self show];
+        return;
+    }
+    [self prepareWindow];
+    self.email.stringValue = email;
+    self.remember.state = NSControlStateValueOn;
+    self.restoringSession = YES;
+    [self setBusy:YES];
+    self.status.stringValue = @"正在验证已保存的登录状态…";
+    NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:[NSURL URLWithString:@"https://ttys.ddxmu.com/api/mbs/me"]];
+    [request setValue:[NSString stringWithFormat:@"Bearer %@", token] forHTTPHeaderField:@"Authorization"];
+    NSURLSessionConfiguration *configuration = NSURLSessionConfiguration.ephemeralSessionConfiguration;
+    configuration.timeoutIntervalForRequest = 15.0;
+    configuration.timeoutIntervalForResource = 30.0;
+    self.session = [NSURLSession sessionWithConfiguration:configuration delegate:[MbsRedirectGuard new]
+                                           delegateQueue:NSOperationQueue.mainQueue];
+    [[self.session dataTaskWithRequest:request completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
+        NSDictionary *payload = data.length ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
+        NSDictionary *user = [payload[@"user"] isKindOfClass:NSDictionary.class] ? payload[@"user"] : nil;
+        NSInteger code = [response isKindOfClass:NSHTTPURLResponse.class] ? [(NSHTTPURLResponse *)response statusCode] : 0;
+        self.restoringSession = NO;
+        if (!error && IsMbsURL(response.URL) && code == 200 && [payload[@"ok"] boolValue] &&
+            [user[@"email"] isKindOfClass:NSString.class] && ValidEmail(user[@"email"]) &&
+            [NormalizedEmail(user[@"email"]) isEqualToString:NormalizedEmail(email)]) {
+            [self didSignInWithToken:token user:user notify:NO];
+        } else {
+            if (code == 401) {
+                MbsDeleteSession();
+                [self show];
+            }
+            self.status.stringValue = code == 401 ? @"登录状态已过期，请重新输入密码。" : @"无法验证登录状态，请检查网络后重新登录。文档仍可离线编辑。";
+        }
+        [self setBusy:NO];
+        [self.session finishTasksAndInvalidate];
+        self.session = nil;
+    }] resume];
+}
+
+- (void)didSignInWithToken:(NSString *)token user:(NSDictionary *)user notify:(BOOL)notify {
+    self.sessionToken = token;
+    self.sessionEmail = user[@"email"];
+    self.password.stringValue = @"";
+    self.status.stringValue = [NSString stringWithFormat:@"已登录：%@", self.sessionEmail];
+    [self.window orderOut:nil];
+    [self.window resignKeyWindow];
+    if (notify) [self showStatusPanel];
+    BOOL known = NO;
+    NSString *label = nil;
+    self.vip = MbsVIPStatusFromPayload(@{@"user": user}, &label, &known);
+    self.membershipLabel = known ? label : @"会员状态同步中…";
+    [self.membershipTimer invalidate];
+    self.membershipTimer = [NSTimer scheduledTimerWithTimeInterval:60.0 target:self
+                                                        selector:@selector(membershipTimerFired:)
+                                                        userInfo:nil repeats:YES];
+    [self postAccountChange];
+    [self refreshMembership:YES];
 }
 
 - (void)hideStatusPanel {
@@ -411,6 +481,8 @@ static NSTextField *AccountLabel(NSView *view, NSString *text, NSRect frame) {
         @"signedIn": @(self.sessionEmail.length > 0),
         @"email": self.sessionEmail ?: @"",
         @"isVip": @(self.vip),
+        @"plan": self.vip ? @"vip" : @"free",
+        @"dailyFreeLimit": @(self.dailyFreeLimit),
         @"membershipLabel": self.membershipLabel ?: @"会员状态待同步"
     };
     [[NSNotificationCenter defaultCenter] postNotificationName:@"MbsLocalAccountDidChange"
@@ -450,9 +522,24 @@ static NSTextField *AccountLabel(NSView *view, NSString *text, NSRect frame) {
         NSInteger statusCode = [response isKindOfClass:NSHTTPURLResponse.class] ? [(NSHTTPURLResponse *)response statusCode] : 0;
         if (!error && IsMbsURL(response.URL) && statusCode >= 200 && statusCode < 300 && [payload[@"ok"] boolValue]) {
             strongSelf.vip = known && vip;
+            // 服务端可下发免费额度上限，用于 Mbs 自有 AI 功能。
+            id limitValue = payload[@"dailyFreeLimit"];
+            if (![limitValue isKindOfClass:NSNumber.class]) {
+                limitValue = payload[@"user"][@"dailyFreeLimit"];
+            }
+            if ([limitValue isKindOfClass:NSNumber.class] && [limitValue integerValue] >= 0) {
+                strongSelf.dailyFreeLimit = [limitValue integerValue];
+            }
             strongSelf.membershipLabel = known ? (label ?: (strongSelf.vip ? @"VIP 会员" : @"普通账号")) : @"会员状态待同步";
         } else if (statusCode == 401) {
+            MbsDeleteSession();
+            strongSelf.sessionToken = nil;
+            strongSelf.sessionEmail = nil;
+            strongSelf.vip = NO;
+            [strongSelf.membershipTimer invalidate];
+            strongSelf.membershipTimer = nil;
             strongSelf.membershipLabel = @"登录状态已失效";
+            [strongSelf hideStatusPanel];
         } else if (!known) {
             strongSelf.membershipLabel = @"会员状态待同步";
         }
@@ -506,6 +593,12 @@ static NSTextField *AccountLabel(NSView *view, NSString *text, NSRect frame) {
         [self showStatusPanel];
         return;
     }
+    [self prepareWindow];
+    [NSApp activateIgnoringOtherApps:YES];
+    [self.window makeKeyAndOrderFront:nil];
+}
+
+- (void)prepareWindow {
     if (!self.window) {
         self.window = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 570, 440)
                                                    styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskMiniaturizable
@@ -513,6 +606,8 @@ static NSTextField *AccountLabel(NSView *view, NSString *text, NSRect frame) {
                                                        defer:NO];
         self.window.title = @"Mbs Office 账号";
         self.window.releasedWhenClosed = NO;
+        self.window.level = NSFloatingWindowLevel;
+        self.window.hidesOnDeactivate = YES;
         [self.window center];
 
         NSView *view = self.window.contentView;
@@ -537,19 +632,30 @@ static NSTextField *AccountLabel(NSView *view, NSString *text, NSRect frame) {
         self.password.placeholderString = @"至少 8 个字符";
         [view addSubview:self.password];
 
-        self.remember = [NSButton checkboxWithTitle:@"记住账号密码" target:nil action:nil];
+        self.remember = [NSButton checkboxWithTitle:@"保持登录状态（30 天）" target:nil action:nil];
         self.remember.frame = NSMakeRect(121, 182, 180, 24);
-        self.remember.state = NSControlStateValueOff;
+        self.remember.state = NSControlStateValueOn;
         [view addSubview:self.remember];
 
-        [self restoreRememberedCredentials];
+        AccountLabel(view, @"仅保存登录会话，不保存密码。", NSMakeRect(121, 155, 425, 24));
 
-        self.status = AccountLabel(view, @"未登录。登录只连接 Mbs Office 账号服务。", NSMakeRect(24, 75, 522, 87));
+        self.status = AccountLabel(view, @"未登录。登录只连接 Mbs Office 账号服务。", NSMakeRect(24, 75, 522, 67));
 
         self.submit = [NSButton buttonWithTitle:@"登录" target:self action:@selector(submit:)];
         self.submit.frame = NSMakeRect(422, 24, 124, 32);
         self.submit.bezelStyle = NSBezelStyleRounded;
         [view addSubview:self.submit];
+
+        NSButton *webLogin = [NSButton buttonWithTitle:@"网页登录" target:self action:@selector(openWebLogin:)];
+        webLogin.frame = NSMakeRect(152, 24, 112, 32);
+        webLogin.bezelStyle = NSBezelStyleRounded;
+        [view addSubview:webLogin];
+
+        NSButton *later = [NSButton buttonWithTitle:@"稍后登录" target:self.window action:@selector(orderOut:)];
+        later.frame = NSMakeRect(282, 24, 124, 32);
+        later.bezelStyle = NSBezelStyleRounded;
+        [view addSubview:later];
+        self.submit.keyEquivalent = @"\r";
 
         self.logout = [NSButton buttonWithTitle:@"退出登录" target:self action:@selector(logout:)];
         self.logout.frame = NSMakeRect(24, 24, 124, 32);
@@ -558,9 +664,6 @@ static NSTextField *AccountLabel(NSView *view, NSString *text, NSRect frame) {
         [view addSubview:self.logout];
         [self changeMode:nil];
     }
-    [self restoreRememberedCredentials];
-    [NSApp activateIgnoringOtherApps:YES];
-    [self.window makeKeyAndOrderFront:nil];
 }
 
 - (void)changeMode:(id)sender {
@@ -571,15 +674,27 @@ static NSTextField *AccountLabel(NSView *view, NSString *text, NSRect frame) {
         : (self.sessionEmail.length ? [NSString stringWithFormat:@"已登录：%@", self.sessionEmail] : @"未登录。登录只连接 Mbs Office 账号服务。");
 }
 
+- (void)openWebLogin:(id)sender {
+    if (self.lastWebLogin && -self.lastWebLogin.timeIntervalSinceNow < 5.0) return;
+    self.lastWebLogin = NSDate.date;
+    if ([[NSWorkspace sharedWorkspace] openURL:[NSURL URLWithString:@"https://ttys.ddxmu.com/mbs/login"]]) {
+        self.status.stringValue = @"已打开网页登录。完成后请返回 App，使用同一账号登录。";
+    } else {
+        self.status.stringValue = @"无法打开网页登录页面，请稍后重试。";
+    }
+}
+
 - (void)setBusy:(BOOL)busy {
     self.submit.enabled = !busy;
     self.mode.enabled = !busy;
     self.email.enabled = !busy;
     self.password.enabled = !busy;
     self.logout.enabled = !busy && self.sessionEmail.length > 0;
+    self.remember.enabled = !busy;
 }
 
 - (void)submit:(id)sender {
+    if (self.restoringSession || self.session) return;
     if (self.mode.selectedSegment == 1) {
         NSURL *url = [NSURL URLWithString:MbsRegisterURLString];
         if ([[NSWorkspace sharedWorkspace] openURL:url]) {
@@ -651,27 +766,18 @@ static NSTextField *AccountLabel(NSView *view, NSString *text, NSRect frame) {
             }
         }
         if (token.length && user[@"email"]) {
-            strongSelf.sessionToken = token;
-            strongSelf.sessionEmail = user[@"email"];
+            BOOL saved = YES;
             if (strongSelf.remember.state == NSControlStateValueOn) {
-                MbsSaveRememberedCredentials(email, password);
+                saved = MbsSaveSession(user[@"email"], token);
+                if (!saved) MbsDeleteSession();
             } else {
-                MbsDeleteRememberedCredentials();
+                MbsDeleteSession();
             }
-            strongSelf.status.stringValue = [NSString stringWithFormat:@"已登录：%@", strongSelf.sessionEmail];
-            [strongSelf.window orderOut:nil];
-            [strongSelf.window resignKeyWindow];
-            [strongSelf showStatusPanel];
-            strongSelf.vip = NO;
-            strongSelf.membershipLabel = @"会员状态同步中…";
-            [strongSelf.membershipTimer invalidate];
-            strongSelf.membershipTimer = [NSTimer scheduledTimerWithTimeInterval:60.0
-                                                                            target:strongSelf
-                                                                          selector:@selector(membershipTimerFired:)
-                                                                          userInfo:nil
-                                                                           repeats:YES];
-            [strongSelf postAccountChange];
-            [strongSelf refreshMembership:YES];
+            [strongSelf didSignInWithToken:token user:user notify:YES];
+            if (!saved) {
+                [strongSelf.window makeKeyAndOrderFront:nil];
+                strongSelf.status.stringValue = @"登录成功，但无法保存登录状态。请检查本机账户文件夹权限。";
+            }
         } else {
             strongSelf.status.stringValue = message ?: @"登录失败，请稍后重试。";
         }
@@ -683,6 +789,7 @@ static NSTextField *AccountLabel(NSView *view, NSString *text, NSRect frame) {
 }
 
 - (void)logout:(id)sender {
+    MbsDeleteSession();
     NSString *token = self.sessionToken;
     self.sessionToken = nil;
     self.sessionEmail = nil;
@@ -711,12 +818,19 @@ static NSTextField *AccountLabel(NSView *view, NSString *text, NSRect frame) {
 
 @end
 
+void MbsStartAccountSession(void) {
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        dispatch_async(dispatch_get_main_queue(), ^{ [[MbsLocalAccountController shared] startSession]; });
+    });
+}
+
 void MbsShowLocalAccount(void) {
     dispatch_async(dispatch_get_main_queue(), ^{ [[MbsLocalAccountController shared] show]; });
 }
 
 const char *MbsLocalAccountCapabilities(void) {
-    return "{\"version\":3,\"localOnly\":false,\"session\":\"https_memory_token\",\"serverConnected\":true,\"serverBase\":\"https://ttys.ddxmu.com\",\"registration\":\"https://ttys.ddxmu.com/mbs/register\",\"vip\":\"https://ttys.ddxmu.com/mbs/vip\",\"membershipSync\":\"/api/mbs/me\",\"accountRequired\":false,\"allMbsFeaturesAvailable\":true,\"changesWpsPaidEntitlements\":false}";
+    return "{\"version\":4,\"localOnly\":false,\"session\":\"https_validated_persistent_token\",\"serverConnected\":true,\"serverBase\":\"https://ttys.ddxmu.com\",\"registration\":\"https://ttys.ddxmu.com/mbs/register\",\"vip\":\"https://ttys.ddxmu.com/mbs/vip\",\"membershipSync\":\"/api/mbs/me\",\"accountRequired\":false,\"allMbsFeaturesAvailable\":true,\"changesWpsPaidEntitlements\":false}";
 }
 
 char *MbsCopyLocalAccountState(void) {
