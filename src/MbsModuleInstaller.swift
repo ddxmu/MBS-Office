@@ -396,6 +396,22 @@ func mbsWritePlist(_ dictionary: [String:Any], app: URL) throws {
     try mbsNoSymlinks(url)
     try PropertyListSerialization.data(fromPropertyList:dictionary,format:.xml,options:0).write(to:url,options:.atomic)
 }
+func mbsSetEditorDisplayName(_ engine: URL) throws {
+    let resources = engine.appendingPathComponent("Contents/Resources")
+    let names = ["InfoPlist.strings", "zh-Hans.lproj/InfoPlist.strings",
+                 "zh-Hant.lproj/InfoPlist.strings", "office6/zh-Hans.lproj/InfoPlist.strings",
+                 "office6/zh-Hant.lproj/InfoPlist.strings"]
+    let pattern = try NSRegularExpression(pattern:#"("CFBundle(?:DisplayName|Name)"\s*=\s*)"[^"]*""#)
+    for name in names {
+        let file = resources.appendingPathComponent(name)
+        guard FileManager.default.fileExists(atPath:file.path) else { continue }
+        try mbsNoSymlinks(file)
+        let text = try String(contentsOf:file,encoding:.utf8)
+        let updated = pattern.stringByReplacingMatches(in:text,range:NSRange(text.startIndex...,in:text),
+                                                       withTemplate:"$1\"Mbs Office\"")
+        if updated != text { try updated.write(to:file,atomically:true,encoding:.utf8) }
+    }
+}
 func mbsPrepareStage(_ app: URL, package: MbsVerifiedPackage, stage: URL) throws {
     try mbsTool("/usr/bin/ditto",[app.path,stage.path])
     for (path,data) in package.contents {
@@ -424,6 +440,7 @@ func mbsPrepareStage(_ app: URL, package: MbsVerifiedPackage, stage: URL) throws
     }
     inner["MbsModuleVersion"] = package.manifest.toVersion
     try mbsWritePlist(inner,app:engine)
+    try mbsSetEditorDisplayName(engine)
     let library = engine.appendingPathComponent("Contents/MacOS/MbsOfflineFlags.dylib")
     for target in [library,stage.appendingPathComponent("Contents/Resources/MbsModuleInstaller"),engine,stage] {
         try mbsNoSymlinks(target)
