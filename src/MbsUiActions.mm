@@ -217,7 +217,6 @@ static bool routeClick(kso_qt::QObject*receiver,kso_qt::QEvent*event) {
 }
 static void buttonMouseRelease(kso_qt::QAbstractButton *button,kso_qt::QMouseEvent *event) {
     NSString *text=property((kso_qt::QObject*)button,"text");
-    NSString *name=className((kso_qt::QObject*)button);
     if (isSuperPiText(text)) {
         MbsOpenSuperPi();
         return;
@@ -226,8 +225,7 @@ static void buttonMouseRelease(kso_qt::QAbstractButton *button,kso_qt::QMouseEve
         MbsShowUpdates();
         return;
     }
-    if ([text containsString:@"立即登录"] || [text isEqualToString:@"登录"] ||
-        [name isEqualToString:@"KUserCenterMenuButton"]) {
+    if ([text containsString:@"立即登录"] || [text isEqualToString:@"登录"]) {
         MbsAccountButton = button;
         MbsShowLocalAccount();
         return;
@@ -236,15 +234,13 @@ static void buttonMouseRelease(kso_qt::QAbstractButton *button,kso_qt::QMouseEve
 }
 static bool maybeShowLocalAccount(void *button) {
     NSString *text=property((kso_qt::QObject*)button,"text");
-    NSString *name=className((kso_qt::QObject*)button);
     if (isSuperPiText(text)) {
         MbsOpenSuperPi(); return true;
     }
     if ([text containsString:@"版本升级"] || [text isEqualToString:@"升级"]) {
         MbsShowUpdates(); return true;
     }
-    if ([text containsString:@"立即登录"] || [text isEqualToString:@"登录"] ||
-        [name isEqualToString:@"KUserCenterMenuButton"]) {
+    if ([text containsString:@"立即登录"] || [text isEqualToString:@"登录"]) {
         MbsAccountButton = static_cast<kso_qt::QAbstractButton *>(button);
         MbsShowLocalAccount(); return true;
     }
@@ -341,8 +337,14 @@ static void InstallMbsLoginMouseMonitor(void) {
                     return (NSEvent *)nil;
                 }
             }
-            if (!isMbsAiWindow && bounds.size.width > 600 && bounds.size.height > 300 &&
-                point.x >= NSMaxX(bounds)-220 && point.y >= NSMaxY(bounds)-220) {
+            // The vendor header can swallow the button event before the
+            // Qt-level hook sees it. Keep a small text-sized fallback for
+            // the top-right login label only; adjacent avatar and toolbar
+            // controls stay outside this rectangle.
+            BOOL isLoginLabelHit = !isMbsAiWindow && bounds.size.width > 600 &&
+                bounds.size.height > 300 && point.x >= NSMaxX(bounds)-170 &&
+                point.y >= NSMaxY(bounds)-175 && point.y <= NSMaxY(bounds)-90;
+            if (isLoginLabelHit) {
                 MbsShowLocalAccount();
                 return (NSEvent *)nil;
             }
