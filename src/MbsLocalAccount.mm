@@ -1,4 +1,6 @@
 #import <AppKit/AppKit.h>
+#import <Security/SecRandom.h>
+#import <CommonCrypto/CommonDigest.h>
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -177,7 +179,7 @@ willPerformHTTPRedirection:(NSHTTPURLResponse *)response
 }
 @end
 
-@interface MbsLocalAccountController : NSObject
+@interface MbsLocalAccountController : NSObject <NSWindowDelegate>
 @property(nonatomic, strong) NSWindow *window;
 @property(nonatomic, strong) NSSegmentedControl *mode;
 @property(nonatomic, strong) NSTextField *email;
@@ -187,6 +189,12 @@ willPerformHTTPRedirection:(NSHTTPURLResponse *)response
 @property(nonatomic, strong) NSButton *logout;
 @property(nonatomic, strong) NSButton *remember;
 @property(nonatomic, strong) NSDate *lastWebLogin;
+@property(nonatomic, strong) NSURLSession *webSession;
+@property(nonatomic, strong) NSURLSessionDataTask *webTask;
+@property(nonatomic, strong) NSTimer *webPollTimer;
+@property(nonatomic, strong) NSDate *webDeadline;
+@property(nonatomic, copy) NSString *webFlow;
+@property(nonatomic, copy) NSString *webVerifier;
 @property(nonatomic, copy) NSString *sessionEmail;
 @property(nonatomic, copy) NSString *sessionToken;
 @property(nonatomic, strong) NSURLSession *session;
@@ -222,6 +230,10 @@ willPerformHTTPRedirection:(NSHTTPURLResponse *)response
 - (void)hideAccountPopover;
 - (void)openVip:(id)sender;
 - (void)openWebLogin:(id)sender;
+- (BOOL)openWebLoginPage:(NSURL *)url;
+- (void)pollWebLogin:(id)sender;
+- (void)cancelWebLogin;
+- (void)deferLogin:(id)sender;
 - (void)postAccountChange;
 @end
 
@@ -289,6 +301,7 @@ static NSTextField *AccountLabel(NSView *view, NSString *text, NSRect frame) {
 }
 
 - (void)didSignInWithToken:(NSString *)token user:(NSDictionary *)user notify:(BOOL)notify {
+    [self cancelWebLogin];
     self.sessionToken = token;
     self.sessionEmail = user[@"email"];
     self.password.stringValue = @"";
@@ -606,13 +619,14 @@ static NSTextField *AccountLabel(NSView *view, NSString *text, NSRect frame) {
                                                        defer:NO];
         self.window.title = @"Mbs Office 账号";
         self.window.releasedWhenClosed = NO;
+        self.window.delegate = self;
         self.window.level = NSFloatingWindowLevel;
         self.window.hidesOnDeactivate = YES;
         [self.window center];
 
         NSView *view = self.window.contentView;
         AccountLabel(view, @"使用 Mbs Office 账号登录，注册会打开 ttys.ddxmu.com 网页。", NSMakeRect(24, 396, 522, 24));
-        AccountLabel(view, @"登录后可使用 Mbs Office 自研功能；文档编辑功能不依赖账号。", NSMakeRect(24, 350, 522, 42));
+        AccountLabel(view, @"登录成功后此窗口自动关闭，并同步账号与会员状态。", NSMakeRect(24, 350, 522, 42));
 
         self.mode = [NSSegmentedControl segmentedControlWithLabels:@[@"登录", @"注册"]
                                                        trackingMode:NSSegmentSwitchTrackingSelectOne
@@ -651,7 +665,7 @@ static NSTextField *AccountLabel(NSView *view, NSString *text, NSRect frame) {
         webLogin.bezelStyle = NSBezelStyleRounded;
         [view addSubview:webLogin];
 
-        NSButton *later = [NSButton buttonWithTitle:@"稍后登录" target:self.window action:@selector(orderOut:)];
+        NSButton *later = [NSButton buttonWithTitle:@"稍后登录" target:self action:@selector(deferLogin:)];
         later.frame = NSMakeRect(282, 24, 124, 32);
         later.bezelStyle = NSBezelStyleRounded;
         [view addSubview:later];
@@ -675,13 +689,140 @@ static NSTextField *AccountLabel(NSView *view, NSString *text, NSRect frame) {
 }
 
 - (void)openWebLogin:(id)sender {
+    if (self.sessionEmail.length || self.restoringSession || self.session) return;
+    if (self.webSession) {
+        self.status.stringValue = @"正在等待网页登录，请在已打开的页面完成登录。";
+        return;
+    }
     if (self.lastWebLogin && -self.lastWebLogin.timeIntervalSinceNow < 5.0) return;
     self.lastWebLogin = NSDate.date;
-    if ([[NSWorkspace sharedWorkspace] openURL:[NSURL URLWithString:@"https://ttys.ddxmu.com/mbs/login"]]) {
-        self.status.stringValue = @"已打开网页登录。完成后请返回 App，使用同一账号登录。";
-    } else {
-        self.status.stringValue = @"无法打开网页登录页面，请稍后重试。";
+    unsigned char bytes[32], digest[CC_SHA256_DIGEST_LENGTH];
+    if (SecRandomCopyBytes(kSecRandomDefault, sizeof(bytes), bytes) != errSecSuccess) {
+        self.status.stringValue = @"无法创建安全登录连接，请使用邮箱和密码登录。";
+        return;
     }
+    NSString *verifier = [[NSData dataWithBytes:bytes length:sizeof(bytes)] base64EncodedStringWithOptions:0];
+    verifier = [[[verifier stringByReplacingOccurrencesOfString:@"+" withString:@"-"]
+                 stringByReplacingOccurrencesOfString:@"/" withString:@"_"] stringByReplacingOccurrencesOfString:@"=" withString:@""];
+    self.webVerifier = verifier;
+    CC_SHA256(verifier.UTF8String, (CC_LONG)[verifier lengthOfBytesUsingEncoding:NSUTF8StringEncoding], digest);
+    NSMutableString *challenge = [NSMutableString string];
+    for (unsigned char byte : digest) [challenge appendFormat:@"%02x", byte];
+    NSURLSessionConfiguration *configuration = NSURLSessionConfiguration.ephemeralSessionConfiguration;
+    configuration.timeoutIntervalForRequest = 15;
+    configuration.timeoutIntervalForResource = 20;
+    self.webSession = [NSURLSession sessionWithConfiguration:configuration delegate:[MbsRedirectGuard new]
+                                              delegateQueue:NSOperationQueue.mainQueue];
+    NSURLSession *session = self.webSession;
+    NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:[NSURL URLWithString:@"https://ttys.ddxmu.com/api/mbs/desktop/start"]];
+    request.HTTPMethod = @"POST";
+    request.HTTPBody = [NSJSONSerialization dataWithJSONObject:@{@"challenge": challenge} options:0 error:nil];
+    [request setValue:@"application/json" forHTTPHeaderField:@"Content-Type"];
+    self.status.stringValue = @"正在创建网页登录连接…";
+    __weak MbsLocalAccountController *weakSelf = self;
+    self.webTask = [session dataTaskWithRequest:request completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
+        MbsLocalAccountController *controller = weakSelf;
+        if (!controller || controller.webSession != session) return;
+        controller.webTask = nil;
+        id payload = data.length ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
+        NSInteger code = [response isKindOfClass:NSHTTPURLResponse.class] ? [(NSHTTPURLResponse *)response statusCode] : 0;
+        NSString *flow = [payload isKindOfClass:NSDictionary.class] && [payload[@"flow"] isKindOfClass:NSString.class] ? payload[@"flow"] : nil;
+        NSRegularExpression *pattern = [NSRegularExpression regularExpressionWithPattern:@"^[A-Za-z0-9_-]{43}$" options:0 error:nil];
+        if (error || !IsMbsURL(response.URL) || code != 200 || ![payload isKindOfClass:NSDictionary.class] || ![payload[@"ok"] boolValue] ||
+            !flow || [pattern numberOfMatchesInString:flow options:0 range:NSMakeRange(0, flow.length)] != 1) {
+            [controller cancelWebLogin];
+            controller.status.stringValue = @"网页登录连接不可用，请使用邮箱和密码登录，或稍后重试。";
+            return;
+        }
+        controller.webFlow = flow;
+        controller.webDeadline = [NSDate dateWithTimeIntervalSinceNow:300];
+        NSURLComponents *components = [NSURLComponents componentsWithString:@"https://ttys.ddxmu.com/mbs/login"];
+        components.fragment = [@"desktop_flow=" stringByAppendingString:flow];
+        if (![controller openWebLoginPage:components.URL]) {
+            [controller cancelWebLogin];
+            controller.status.stringValue = @"无法打开网页登录页面，请稍后重试。";
+            return;
+        }
+        controller.status.stringValue = @"请在网页完成登录，成功后将自动连接到 Mbs Office。";
+        controller.webPollTimer = [NSTimer scheduledTimerWithTimeInterval:2 target:controller
+                selector:@selector(pollWebLogin:) userInfo:nil repeats:YES];
+    }];
+    [self.webTask resume];
+}
+
+- (BOOL)openWebLoginPage:(NSURL *)url {
+    return [[NSWorkspace sharedWorkspace] openURL:url];
+}
+
+- (void)pollWebLogin:(id)sender {
+    if (self.webDeadline.timeIntervalSinceNow <= 0) {
+        [self cancelWebLogin];
+        self.status.stringValue = @"网页登录连接已过期，请重新点击“网页登录”或使用邮箱和密码登录。";
+        return;
+    }
+    if (!self.webFlow.length || self.webTask) return;
+    NSString *flow = self.webFlow;
+    NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:[NSURL URLWithString:@"https://ttys.ddxmu.com/api/mbs/desktop/poll"]];
+    request.HTTPMethod = @"POST";
+    request.HTTPBody = [NSJSONSerialization dataWithJSONObject:@{@"flow": flow, @"verifier": self.webVerifier} options:0 error:nil];
+    [request setValue:@"application/json" forHTTPHeaderField:@"Content-Type"];
+    __weak MbsLocalAccountController *weakSelf = self;
+    self.webTask = [self.webSession dataTaskWithRequest:request completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
+        MbsLocalAccountController *controller = weakSelf;
+        if (!controller || ![controller.webFlow isEqualToString:flow]) return;
+        controller.webTask = nil;
+        if (error) {
+            controller.status.stringValue = @"网页登录连接暂时中断，正在重试…";
+            return;
+        }
+        id payload = data.length ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
+        NSInteger code = [response isKindOfClass:NSHTTPURLResponse.class] ? [(NSHTTPURLResponse *)response statusCode] : 0;
+        if (!IsMbsURL(response.URL) || ![payload isKindOfClass:NSDictionary.class] || code != 200 || ![payload[@"ok"] boolValue]) {
+            [controller cancelWebLogin];
+            controller.status.stringValue = @"网页登录连接已失效，请重新发起登录。";
+            return;
+        }
+        if ([payload[@"status"] isEqual:@"pending"]) return;
+        NSString *token = [payload[@"token"] isKindOfClass:NSString.class] ? payload[@"token"] : nil;
+        NSDictionary *user = [payload[@"user"] isKindOfClass:NSDictionary.class] ? payload[@"user"] : nil;
+        if (![payload[@"status"] isEqual:@"complete"] || token.length < 32 || token.length > 128 ||
+            ![user[@"email"] isKindOfClass:NSString.class] || !ValidEmail(user[@"email"])) {
+            [controller cancelWebLogin];
+            controller.status.stringValue = @"账号服务返回内容不正确，请重新登录。";
+            return;
+        }
+        BOOL saved = YES;
+        if (controller.remember.state == NSControlStateValueOn) saved = MbsSaveSession(user[@"email"], token);
+        if (controller.remember.state != NSControlStateValueOn || !saved) MbsDeleteSession();
+        [controller didSignInWithToken:token user:user notify:YES];
+        if (!saved) {
+            [controller.window makeKeyAndOrderFront:nil];
+            controller.status.stringValue = @"登录成功，但无法保存登录状态。请检查本机账户文件夹权限。";
+        }
+    }];
+    [self.webTask resume];
+}
+
+- (void)cancelWebLogin {
+    [self.webPollTimer invalidate];
+    self.webPollTimer = nil;
+    [self.webTask cancel];
+    self.webTask = nil;
+    [self.webSession invalidateAndCancel];
+    self.webSession = nil;
+    self.webFlow = nil;
+    self.webVerifier = nil;
+    self.webDeadline = nil;
+}
+
+- (void)deferLogin:(id)sender {
+    [self cancelWebLogin];
+    self.password.stringValue = @"";
+    [self.window orderOut:nil];
+}
+
+- (void)windowWillClose:(NSNotification *)notification {
+    if (notification.object == self.window) [self cancelWebLogin];
 }
 
 - (void)setBusy:(BOOL)busy {
@@ -729,6 +870,7 @@ static NSTextField *AccountLabel(NSView *view, NSString *text, NSRect frame) {
     [request setValue:@"application/json" forHTTPHeaderField:@"Content-Type"];
     [request setValue:@"application/json" forHTTPHeaderField:@"Accept"];
 
+    [self cancelWebLogin];
     self.password.stringValue = @"";
     [self setBusy:YES];
     self.status.stringValue = @"正在连接 Mbs Office 账号服务…";
@@ -789,6 +931,7 @@ static NSTextField *AccountLabel(NSView *view, NSString *text, NSRect frame) {
 }
 
 - (void)logout:(id)sender {
+    [self cancelWebLogin];
     MbsDeleteSession();
     NSString *token = self.sessionToken;
     self.sessionToken = nil;
