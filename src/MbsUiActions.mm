@@ -343,7 +343,7 @@ static void InstallMbsLoginMouseMonitor(void) {
             // controls stay outside this rectangle.
             BOOL isLoginLabelHit = !isMbsAiWindow && bounds.size.width > 600 &&
                 bounds.size.height > 300 && point.x >= NSMaxX(bounds)-170 &&
-                point.y >= NSMaxY(bounds)-175 && point.y <= NSMaxY(bounds)-90;
+                point.y >= NSMaxY(bounds)-175 && point.y <= NSMaxY(bounds)-5;
             if (isLoginLabelHit) {
                 MbsShowLocalAccount();
                 return (NSEvent *)nil;
