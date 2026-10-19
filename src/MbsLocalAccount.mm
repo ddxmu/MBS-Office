@@ -5,6 +5,7 @@
 static NSString *MbsLoginURLString = @"https://ttys.ddxmu.com/api/mbs/login";
 static NSString *MbsLogoutURLString = @"https://ttys.ddxmu.com/api/mbs/logout";
 static NSString *MbsRegisterURLString = @"https://ttys.ddxmu.com/mbs/register";
+static NSString *MbsVipURLString = @"https://ttys.ddxmu.com/mbs/vip";
 static NSString *MbsRememberedCredentialsService = @"com.mbs.office.account";
 static NSString *MbsRememberedCredentialsAccount = @"remembered-login";
 
@@ -80,6 +81,80 @@ static BOOL IsMbsURL(NSURL *url) {
            [url.host.lowercaseString isEqualToString:@"ttys.ddxmu.com"];
 }
 
+static BOOL MbsStringMeansVIP(NSString *value, BOOL *known) {
+    NSString *normalized = value.lowercaseString;
+    if ([normalized isEqualToString:@"vip"] || [normalized isEqualToString:@"svip"] ||
+        [normalized isEqualToString:@"pro"] || [normalized isEqualToString:@"premium"] ||
+        [normalized isEqualToString:@"paid"] || [normalized isEqualToString:@"member"] ||
+        [normalized isEqualToString:@"会员"] || [normalized isEqualToString:@"vip会员"]) {
+        if (known) *known = YES;
+        return YES;
+    }
+    if ([normalized isEqualToString:@"free"] || [normalized isEqualToString:@"normal"] ||
+        [normalized isEqualToString:@"user"] || [normalized isEqualToString:@"普通"] ||
+        [normalized isEqualToString:@"普通会员"] || [normalized isEqualToString:@"未开通"]) {
+        if (known) *known = YES;
+        return NO;
+    }
+    return NO;
+}
+
+static BOOL MbsVIPStatusFromPayload(NSDictionary *payload, NSString **labelOut, BOOL *knownOut) {
+    if (labelOut) *labelOut = nil;
+    if (knownOut) *knownOut = NO;
+    if (![payload isKindOfClass:NSDictionary.class]) return NO;
+
+    id candidate = [payload[ @"user" ] isKindOfClass:NSDictionary.class] ? payload[@"user"] : payload;
+    NSArray<NSString *> *booleanKeys = @[@"vip", @"isVip", @"is_vip", @"premium", @"isPremium",
+                                         @"pro", @"isPro", @"paid", @"isPaid"];
+    for (NSString *key in booleanKeys) {
+        id value = [candidate[key] isKindOfClass:NSNumber.class] ? candidate[key] : payload[key];
+        if ([value isKindOfClass:NSNumber.class]) {
+            if (knownOut) *knownOut = YES;
+            if (labelOut) *labelOut = [value boolValue] ? @"VIP 会员" : @"普通账号";
+            return [value boolValue];
+        }
+    }
+
+    id membership = [candidate[@"membership"] isKindOfClass:NSDictionary.class] ? candidate[@"membership"] : nil;
+    if (membership) {
+        for (NSString *key in booleanKeys) {
+            id value = membership[key];
+            if ([value isKindOfClass:NSNumber.class]) {
+                if (knownOut) *knownOut = YES;
+                if (labelOut) *labelOut = [value boolValue] ? @"VIP 会员" : @"普通账号";
+                return [value boolValue];
+            }
+        }
+        for (NSString *key in @[@"status", @"plan", @"level", @"name"]) {
+            id value = membership[key];
+            if ([value isKindOfClass:NSString.class]) {
+                BOOL known = NO;
+                BOOL vip = MbsStringMeansVIP(value, &known);
+                if (known) {
+                    if (knownOut) *knownOut = YES;
+                    if (labelOut) *labelOut = vip ? @"VIP 会员" : @"普通账号";
+                    return vip;
+                }
+            }
+        }
+    }
+
+    for (NSString *key in @[@"plan", @"level", @"membershipStatus", @"membership_status", @"role"]) {
+        id value = candidate[key] ?: payload[key];
+        if ([value isKindOfClass:NSString.class]) {
+            BOOL known = NO;
+            BOOL vip = MbsStringMeansVIP(value, &known);
+            if (known) {
+                if (knownOut) *knownOut = YES;
+                if (labelOut) *labelOut = vip ? @"VIP 会员" : @"普通账号";
+                return vip;
+            }
+        }
+    }
+    return NO;
+}
+
 @interface MbsRedirectGuard : NSObject <NSURLSessionTaskDelegate>
 @end
 
@@ -111,12 +186,28 @@ willPerformHTTPRedirection:(NSHTTPURLResponse *)response
 @property(nonatomic, weak) NSWindow *statusHostWindow;
 @property(nonatomic, strong) NSTextField *statusView;
 @property(nonatomic, strong) NSTimer *statusDismissTimer;
+@property(nonatomic, assign) BOOL vip;
+@property(nonatomic, copy) NSString *membershipLabel;
+@property(nonatomic, strong) NSPanel *accountPanel;
+@property(nonatomic, strong) NSTextField *accountPanelEmail;
+@property(nonatomic, strong) NSTextField *accountPanelMembership;
+@property(nonatomic, strong) NSButton *accountPanelUpgrade;
+@property(nonatomic, strong) NSButton *accountPanelLogout;
+@property(nonatomic, weak) NSWindow *accountHostWindow;
+@property(nonatomic, strong) NSTimer *membershipTimer;
+@property(nonatomic, strong) NSURLSessionDataTask *membershipTask;
+@property(nonatomic, strong) NSDate *membershipLastRefresh;
 + (instancetype)shared;
 - (void)show;
 - (void)restoreRememberedCredentials;
 - (void)submit:(id)sender;
 - (void)changeMode:(id)sender;
 - (void)logout:(id)sender;
+- (void)refreshMembership:(BOOL)force;
+- (void)showAccountPopoverForWindow:(NSWindow *)window point:(NSPoint)point;
+- (void)hideAccountPopover;
+- (void)openVip:(id)sender;
+- (void)postAccountChange;
 @end
 
 static NSTextField *AccountLabel(NSView *view, NSString *text, NSRect frame) {
@@ -213,14 +304,203 @@ static NSTextField *AccountLabel(NSView *view, NSString *text, NSRect frame) {
                                                                 repeats:NO];
 }
 
+- (void)hideAccountPopover {
+    [self.accountPanel orderOut:nil];
+    if (self.accountHostWindow && [self.accountHostWindow.childWindows containsObject:self.accountPanel]) {
+        [self.accountHostWindow removeChildWindow:self.accountPanel];
+    }
+    self.accountHostWindow = nil;
+}
+
+- (void)ensureAccountPopover {
+    if (self.accountPanel) return;
+    self.accountPanel = [[NSPanel alloc] initWithContentRect:NSMakeRect(0, 0, 368, 292)
+                                                     styleMask:NSWindowStyleMaskBorderless | NSWindowStyleMaskNonactivatingPanel
+                                                       backing:NSBackingStoreBuffered
+                                                         defer:NO];
+    self.accountPanel.releasedWhenClosed = NO;
+    self.accountPanel.level = NSFloatingWindowLevel;
+    self.accountPanel.opaque = NO;
+    self.accountPanel.backgroundColor = NSColor.clearColor;
+    self.accountPanel.hasShadow = YES;
+    self.accountPanel.hidesOnDeactivate = NO;
+    self.accountPanel.ignoresMouseEvents = NO;
+    self.accountPanel.collectionBehavior = NSWindowCollectionBehaviorCanJoinAllSpaces |
+                                            NSWindowCollectionBehaviorFullScreenAuxiliary;
+
+    NSVisualEffectView *background = [[NSVisualEffectView alloc] initWithFrame:self.accountPanel.contentView.bounds];
+    background.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+    background.material = NSVisualEffectMaterialPopover;
+    background.blendingMode = NSVisualEffectBlendingModeBehindWindow;
+    background.state = NSVisualEffectStateActive;
+    background.wantsLayer = YES;
+    background.layer.cornerRadius = 14.0;
+    background.layer.masksToBounds = YES;
+    [self.accountPanel.contentView addSubview:background];
+
+    NSTextField *title = [NSTextField labelWithString:@"Mbs Office 账号"];
+    title.font = [NSFont systemFontOfSize:18.0 weight:NSFontWeightSemibold];
+    title.frame = NSMakeRect(24, 246, 320, 24);
+    [self.accountPanel.contentView addSubview:title];
+
+    self.accountPanelEmail = [NSTextField labelWithString:@""];
+    self.accountPanelEmail.font = [NSFont systemFontOfSize:15.0 weight:NSFontWeightMedium];
+    self.accountPanelEmail.lineBreakMode = NSLineBreakByTruncatingMiddle;
+    self.accountPanelEmail.frame = NSMakeRect(24, 211, 320, 22);
+    [self.accountPanel.contentView addSubview:self.accountPanelEmail];
+
+    self.accountPanelMembership = [NSTextField labelWithString:@""];
+    self.accountPanelMembership.font = [NSFont systemFontOfSize:13.0 weight:NSFontWeightRegular];
+    self.accountPanelMembership.textColor = NSColor.secondaryLabelColor;
+    self.accountPanelMembership.frame = NSMakeRect(24, 176, 320, 22);
+    [self.accountPanel.contentView addSubview:self.accountPanelMembership];
+
+    NSBox *separator = [[NSBox alloc] initWithFrame:NSMakeRect(24, 157, 320, 1)];
+    separator.boxType = NSBoxSeparator;
+    [self.accountPanel.contentView addSubview:separator];
+
+    self.accountPanelUpgrade = [NSButton buttonWithTitle:@"立即升级" target:self action:@selector(openVip:)];
+    self.accountPanelUpgrade.frame = NSMakeRect(24, 101, 320, 38);
+    self.accountPanelUpgrade.bezelStyle = NSBezelStyleRounded;
+    [self.accountPanel.contentView addSubview:self.accountPanelUpgrade];
+
+    self.accountPanelLogout = [NSButton buttonWithTitle:@"退出登录" target:self action:@selector(logout:)];
+    self.accountPanelLogout.frame = NSMakeRect(24, 52, 320, 30);
+    self.accountPanelLogout.bezelStyle = NSBezelStyleTexturedRounded;
+    [self.accountPanel.contentView addSubview:self.accountPanelLogout];
+
+    NSTextField *hint = [NSTextField labelWithString:@"会员状态由账号服务同步。"];
+    hint.font = [NSFont systemFontOfSize:11.0 weight:NSFontWeightRegular];
+    hint.textColor = NSColor.tertiaryLabelColor;
+    hint.frame = NSMakeRect(24, 20, 320, 18);
+    [self.accountPanel.contentView addSubview:hint];
+}
+
+- (void)showAccountPopoverForWindow:(NSWindow *)window point:(NSPoint)point {
+    if (!self.sessionEmail.length || !window) {
+        [self hideAccountPopover];
+        return;
+    }
+    [self ensureAccountPopover];
+    self.accountHostWindow = window;
+    self.accountPanelEmail.stringValue = self.sessionEmail;
+    self.accountPanelMembership.stringValue = self.membershipLabel.length ? self.membershipLabel : @"会员状态同步中…";
+    self.accountPanelUpgrade.title = self.vip ? @"已是 VIP 会员" : @"立即升级";
+    self.accountPanelUpgrade.enabled = !self.vip;
+    self.accountPanelLogout.enabled = YES;
+
+    NSPoint screenPoint = [window convertPointToScreen:point];
+    NSRect frame = self.accountPanel.frame;
+    NSScreen *screen = window.screen ?: NSScreen.mainScreen;
+    NSRect visible = screen.visibleFrame;
+    frame.origin.x = screenPoint.x - frame.size.width + 42.0;
+    frame.origin.y = screenPoint.y - frame.size.height - 8.0;
+    frame.origin.x = MAX(NSMinX(visible) + 8.0, MIN(NSMaxX(visible) - frame.size.width - 8.0, frame.origin.x));
+    frame.origin.y = MAX(NSMinY(visible) + 8.0, MIN(NSMaxY(visible) - frame.size.height - 8.0, frame.origin.y));
+    [self.accountPanel setFrame:frame display:NO];
+    if (self.accountPanel.parentWindow != window) {
+        [self.accountPanel.parentWindow removeChildWindow:self.accountPanel];
+        [window addChildWindow:self.accountPanel ordered:NSWindowAbove];
+    }
+    [self.accountPanel orderFrontRegardless];
+    [self refreshMembership:NO];
+}
+
+- (void)postAccountChange {
+    NSDictionary *info = @{
+        @"signedIn": @(self.sessionEmail.length > 0),
+        @"email": self.sessionEmail ?: @"",
+        @"isVip": @(self.vip),
+        @"membershipLabel": self.membershipLabel ?: @"会员状态待同步"
+    };
+    [[NSNotificationCenter defaultCenter] postNotificationName:@"MbsLocalAccountDidChange"
+                                                        object:nil
+                                                      userInfo:info];
+}
+
+- (void)refreshMembership:(BOOL)force {
+    if (!self.sessionEmail.length || !self.sessionToken.length) {
+        self.vip = NO;
+        self.membershipLabel = @"未登录";
+        [self postAccountChange];
+        return;
+    }
+    if (!force && (self.membershipTask || (self.membershipLastRefresh &&
+                                           -[self.membershipLastRefresh timeIntervalSinceNow] < 10.0))) {
+        return;
+    }
+    self.membershipLastRefresh = [NSDate date];
+    NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:[NSURL URLWithString:@"https://ttys.ddxmu.com/api/mbs/me"]];
+    request.HTTPMethod = @"GET";
+    [request setValue:[NSString stringWithFormat:@"Bearer %@", self.sessionToken] forHTTPHeaderField:@"Authorization"];
+    [request setValue:@"application/json" forHTTPHeaderField:@"Accept"];
+    MbsRedirectGuard *guard = [MbsRedirectGuard new];
+    NSURLSessionConfiguration *configuration = [NSURLSessionConfiguration ephemeralSessionConfiguration];
+    configuration.timeoutIntervalForRequest = 15.0;
+    configuration.timeoutIntervalForResource = 30.0;
+    NSURLSession *session = [NSURLSession sessionWithConfiguration:configuration delegate:guard delegateQueue:[NSOperationQueue mainQueue]];
+    __weak MbsLocalAccountController *weakSelf = self;
+    self.membershipTask = [session dataTaskWithRequest:request completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
+        MbsLocalAccountController *strongSelf = weakSelf;
+        if (!strongSelf) return;
+        NSDictionary *payload = data.length ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
+        BOOL known = NO;
+        NSString *label = nil;
+        BOOL vip = MbsVIPStatusFromPayload(payload, &label, &known);
+        NSInteger statusCode = [response isKindOfClass:NSHTTPURLResponse.class] ? [(NSHTTPURLResponse *)response statusCode] : 0;
+        if (!error && IsMbsURL(response.URL) && statusCode >= 200 && statusCode < 300 && [payload[@"ok"] boolValue]) {
+            strongSelf.vip = known && vip;
+            strongSelf.membershipLabel = known ? (label ?: (strongSelf.vip ? @"VIP 会员" : @"普通账号")) : @"会员状态待同步";
+        } else if (statusCode == 401) {
+            strongSelf.membershipLabel = @"登录状态已失效";
+        } else if (!known) {
+            strongSelf.membershipLabel = @"会员状态待同步";
+        }
+        strongSelf.membershipTask = nil;
+        [session finishTasksAndInvalidate];
+        [strongSelf postAccountChange];
+        if (strongSelf.accountPanel.isVisible) {
+            strongSelf.accountPanelMembership.stringValue = strongSelf.membershipLabel;
+            strongSelf.accountPanelUpgrade.title = strongSelf.vip ? @"已是 VIP 会员" : @"立即升级";
+            strongSelf.accountPanelUpgrade.enabled = !strongSelf.vip;
+        }
+    }];
+    [self.membershipTask resume];
+}
+
+- (void)openVip:(id)sender {
+    NSURLComponents *components = [NSURLComponents componentsWithString:MbsVipURLString];
+    if (self.sessionToken.length) {
+        NSString *escapedToken = [self.sessionToken stringByAddingPercentEncodingWithAllowedCharacters:NSCharacterSet.URLQueryAllowedCharacterSet];
+        components.fragment = [NSString stringWithFormat:@"mbs_session=%@", escapedToken ?: @""];
+    }
+    NSURL *url = components.URL ?: [NSURL URLWithString:MbsVipURLString];
+    if (![[NSWorkspace sharedWorkspace] openURL:url]) {
+        self.membershipLabel = @"无法打开升级页面";
+        [self postAccountChange];
+        return;
+    }
+    self.membershipLabel = @"等待会员状态同步…";
+    self.accountPanelMembership.stringValue = self.membershipLabel;
+    [self refreshMembership:YES];
+    __weak MbsLocalAccountController *weakSelf = self;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        [weakSelf refreshMembership:YES];
+    });
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(10.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        [weakSelf refreshMembership:YES];
+    });
+}
+
+- (void)membershipTimerFired:(NSTimer *)timer {
+    [self refreshMembership:NO];
+}
+
 - (void)show {
     // A successful login is already reflected in the main window. Opening the
     // account entry again must not bring the login form back over the editor.
     if (self.sessionEmail.length) {
-        [[NSNotificationCenter defaultCenter] postNotificationName:@"MbsLocalAccountDidChange"
-                                                            object:nil
-                                                          userInfo:@{@"signedIn": @YES,
-                                                                     @"email": self.sessionEmail}];
+        [self postAccountChange];
         [self.window orderOut:nil];
         [self.window resignKeyWindow];
         [self showStatusPanel];
@@ -382,9 +662,16 @@ static NSTextField *AccountLabel(NSView *view, NSString *text, NSRect frame) {
             [strongSelf.window orderOut:nil];
             [strongSelf.window resignKeyWindow];
             [strongSelf showStatusPanel];
-            [[NSNotificationCenter defaultCenter] postNotificationName:@"MbsLocalAccountDidChange"
-                                                                object:nil
-                                                              userInfo:@{@"signedIn": @YES, @"email": strongSelf.sessionEmail}];
+            strongSelf.vip = NO;
+            strongSelf.membershipLabel = @"会员状态同步中…";
+            [strongSelf.membershipTimer invalidate];
+            strongSelf.membershipTimer = [NSTimer scheduledTimerWithTimeInterval:60.0
+                                                                            target:strongSelf
+                                                                          selector:@selector(membershipTimerFired:)
+                                                                          userInfo:nil
+                                                                           repeats:YES];
+            [strongSelf postAccountChange];
+            [strongSelf refreshMembership:YES];
         } else {
             strongSelf.status.stringValue = message ?: @"登录失败，请稍后重试。";
         }
@@ -399,13 +686,18 @@ static NSTextField *AccountLabel(NSView *view, NSString *text, NSRect frame) {
     NSString *token = self.sessionToken;
     self.sessionToken = nil;
     self.sessionEmail = nil;
+    [self.membershipTimer invalidate];
+    self.membershipTimer = nil;
+    [self.membershipTask cancel];
+    self.membershipTask = nil;
+    self.vip = NO;
+    self.membershipLabel = @"未登录";
     self.password.stringValue = @"";
     self.status.stringValue = @"已退出登录。";
     [self hideStatusPanel];
+    [self hideAccountPopover];
     self.logout.enabled = NO;
-    [[NSNotificationCenter defaultCenter] postNotificationName:@"MbsLocalAccountDidChange"
-                                                        object:nil
-                                                      userInfo:@{@"signedIn": @NO}];
+    [self postAccountChange];
 
     if (!token.length) return;
     NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:[NSURL URLWithString:MbsLogoutURLString]];
@@ -424,18 +716,21 @@ void MbsShowLocalAccount(void) {
 }
 
 const char *MbsLocalAccountCapabilities(void) {
-    return "{\"version\":2,\"localOnly\":false,\"session\":\"https_memory_token\",\"serverConnected\":true,\"serverBase\":\"https://ttys.ddxmu.com\",\"registration\":\"https://ttys.ddxmu.com/mbs/register\",\"accountRequired\":false,\"allMbsFeaturesAvailable\":true,\"changesWpsPaidEntitlements\":false}";
+    return "{\"version\":3,\"localOnly\":false,\"session\":\"https_memory_token\",\"serverConnected\":true,\"serverBase\":\"https://ttys.ddxmu.com\",\"registration\":\"https://ttys.ddxmu.com/mbs/register\",\"vip\":\"https://ttys.ddxmu.com/mbs/vip\",\"membershipSync\":\"/api/mbs/me\",\"accountRequired\":false,\"allMbsFeaturesAvailable\":true,\"changesWpsPaidEntitlements\":false}";
 }
 
 char *MbsCopyLocalAccountState(void) {
     __block NSData *data;
     void (^readState)(void) = ^{
-        NSString *email = [MbsLocalAccountController shared].sessionEmail;
+        MbsLocalAccountController *controller = [MbsLocalAccountController shared];
+        NSString *email = controller.sessionEmail;
         NSDictionary *state = @{
             @"localOnly": @NO,
             @"serverConnected": @YES,
             @"signedIn": @(email.length > 0),
             @"email": email ?: @"",
+            @"isVip": @(controller.vip),
+            @"membershipLabel": controller.membershipLabel ?: @"会员状态待同步",
             @"membershipRequired": @NO,
             @"allMbsFeaturesAvailable": @YES,
             @"vendorEntitlementsChanged": @NO
@@ -457,4 +752,22 @@ const char *MbsCurrentAccountEmail(void) {
     void (^readEmail)(void) = ^{ email = [[MbsLocalAccountController shared].sessionEmail copy]; };
     if (NSThread.isMainThread) readEmail(); else dispatch_sync(dispatch_get_main_queue(), readEmail);
     return email.length ? strdup(email.UTF8String) : NULL;
+}
+
+void MbsAccountHoverAtWindow(void *windowPointer, double x, double y) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        MbsLocalAccountController *controller = [MbsLocalAccountController shared];
+        NSWindow *window = (__bridge NSWindow *)windowPointer;
+        if (!window || window == controller.accountPanel) return;
+        if (controller.accountPanel.isVisible && NSPointInRect([NSEvent mouseLocation], controller.accountPanel.frame)) return;
+        [controller showAccountPopoverForWindow:window point:NSMakePoint(x, y)];
+    });
+}
+
+void MbsHideAccountPopover(void) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        MbsLocalAccountController *controller = [MbsLocalAccountController shared];
+        if (controller.accountPanel.isVisible && NSPointInRect(NSEvent.mouseLocation, controller.accountPanel.frame)) return;
+        [controller hideAccountPopover];
+    });
 }

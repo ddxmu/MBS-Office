@@ -11,6 +11,10 @@ char *MbsCopyLocalAccountState(void);
 void MbsLocalAccountSignOut(void);
 // Returns the current signed-in email for native header/status updates.
 const char *MbsCurrentAccountEmail(void);
+// Updates the account hover card from the editor's small account hit area.
+// The window pointer is borrowed and is only used during the call.
+void MbsAccountHoverAtWindow(void *window, double x, double y);
+void MbsHideAccountPopover(void);
 #ifdef __cplusplus
 }
 #endif

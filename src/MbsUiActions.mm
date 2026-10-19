@@ -302,13 +302,34 @@ static void InstallMbsLoginMouseMonitor(void) {
                                                         usingBlock:^(NSNotification *note) {
             MbsRefreshAccountHeader(note.userInfo[@"signedIn"]);
         }];
-        MbsLoginMouseMonitor = [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskLeftMouseUp handler:^NSEvent *(NSEvent *event) {
+        [[NSNotificationCenter defaultCenter] addObserverForName:NSWindowDidBecomeKeyNotification
+                                                            object:nil
+                                                             queue:[NSOperationQueue mainQueue]
+                                                        usingBlock:^(NSNotification *note) {
+            NSWindow *window = note.object;
+            if (window) window.acceptsMouseMovedEvents = YES;
+        }];
+        for (NSWindow *window in NSApp.windows) window.acceptsMouseMovedEvents = YES;
+        MbsLoginMouseMonitor = [NSEvent addLocalMonitorForEventsMatchingMask:(NSEventMaskLeftMouseUp | NSEventMaskMouseMoved) handler:^NSEvent *(NSEvent *event) {
             NSWindow *window=event.window;
             NSView *content=window.contentView;
             NSPoint point=event.locationInWindow;
             NSRect bounds=content ? content.bounds : NSZeroRect;
             BOOL isMbsAiWindow = [window.title isEqualToString:@"AI 设置"] ||
                                  [window.title isEqualToString:@"AI"];
+            if (event.type == NSEventTypeMouseMoved) {
+                // Keep the hover target deliberately small: only the top-right
+                // account control can open the account card.
+                BOOL accountHoverHit = !isMbsAiWindow && bounds.size.width > 600 &&
+                    bounds.size.height > 300 && point.x >= NSMaxX(bounds) - 190 &&
+                    point.y >= NSMaxY(bounds) - 180 && point.y <= NSMaxY(bounds) - 5;
+                if (accountHoverHit) {
+                    MbsAccountHoverAtWindow((__bridge void *)window, point.x, point.y);
+                } else {
+                    MbsHideAccountPopover();
+                }
+                return event;
+            }
             // The vendor header can swallow the button event before the
             // Qt-level hook sees it. Do not use a coordinate-wide upgrade
             // fallback: neighboring header controls must remain ordinary.
