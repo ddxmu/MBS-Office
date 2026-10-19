@@ -58,6 +58,13 @@ static kso_qt::QString literal(NSString *value) {
         return kso_qt::QString(cache[value].pointerValue);
     }
 }
+static NSString *MbsAccountInitialForEmail(NSString *email) {
+    NSString *local = [[email componentsSeparatedByString:@"@"] firstObject];
+    if (!local.length) local = email;
+    if (!local.length) return @"";
+    NSRange first = [local rangeOfComposedCharacterSequenceAtIndex:0];
+    return [[local substringWithRange:first] uppercaseString];
+}
 static NSString *updated(NSString *text) {
     NSString *result = [text stringByReplacingOccurrencesOfString:@"免费使用企业版" withString:@"版本升级"];
     result = [result stringByReplacingOccurrencesOfString:@"WPS 灵犀" withString:@"超级派"];
@@ -67,7 +74,7 @@ static NSString *updated(NSString *text) {
     result = [result stringByReplacingOccurrencesOfString:@"Mbs 超级派" withString:@"超级派"];
     const char *email = MbsCurrentAccountEmail();
     if (email && ([result containsString:@"立即登录"] || [result isEqualToString:@"登录"])) {
-        result = [NSString stringWithFormat:@"已登录：%s", email];
+        result = MbsAccountInitialForEmail([NSString stringWithUTF8String:email]);
     }
     free((void *)email);
     return result;
@@ -140,7 +147,7 @@ static void rememberAccountWidget(NSMutableArray<NSValue *> *storage, const void
 static void MbsRefreshAccountHeader(NSNumber *signedIn) {
     const char *email = MbsCurrentAccountEmail();
     NSString *text = (signedIn.boolValue && email) ?
-        [NSString stringWithFormat:@"已登录：%s", email] : @"立即登录";
+        MbsAccountInitialForEmail([NSString stringWithUTF8String:email]) : @"立即登录";
     kso_qt::QString value = literal(text);
     if (MbsAccountButton) MbsAccountButton->setText(value);
     if (MbsAccountLabel) MbsAccountLabel->setText(value);
@@ -271,7 +278,9 @@ static void headAvatarClicked(void *self,const kso_qt::QString &value) {
     MbsShowLocalAccount();
 }
 static int accountLogin(void *self,const void *params) {
-    MbsShowLocalAccount();
+    // The editor calls this vendor entry during startup and background
+    // service checks. It is not a user click, so never open a login window
+    // from it. Explicit account controls are routed above.
     return 0;
 }
 static bool desktopOpenUrl(const void *url) {
@@ -319,6 +328,8 @@ static void InstallMbsLoginMouseMonitor(void) {
             NSView *content=window.contentView;
             NSPoint point=event.locationInWindow;
             NSRect bounds=content ? content.bounds : NSZeroRect;
+            BOOL isMbsAiWindow = [window.title isEqualToString:@"AI 设置"] ||
+                                 [window.title isEqualToString:@"AI"];
             if (bounds.size.width > 600 && bounds.size.height > 300) {
                 CGFloat xRatio = point.x / bounds.size.width;
                 CGFloat yRatio = point.y / bounds.size.height;
@@ -330,7 +341,7 @@ static void InstallMbsLoginMouseMonitor(void) {
                     return (NSEvent *)nil;
                 }
             }
-            if (bounds.size.width > 600 && bounds.size.height > 300 &&
+            if (!isMbsAiWindow && bounds.size.width > 600 && bounds.size.height > 300 &&
                 point.x >= NSMaxX(bounds)-220 && point.y >= NSMaxY(bounds)-220) {
                 MbsShowLocalAccount();
                 return (NSEvent *)nil;

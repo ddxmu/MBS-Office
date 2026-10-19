@@ -111,7 +111,6 @@ willPerformHTTPRedirection:(NSHTTPURLResponse *)response
 @property(nonatomic, weak) NSWindow *statusHostWindow;
 @property(nonatomic, strong) NSTextField *statusView;
 @property(nonatomic, strong) NSTimer *statusDismissTimer;
-@property(nonatomic, assign) NSTimeInterval accountWindowSuppressedUntil;
 + (instancetype)shared;
 - (void)show;
 - (void)restoreRememberedCredentials;
@@ -215,7 +214,13 @@ static NSTextField *AccountLabel(NSView *view, NSString *text, NSRect frame) {
 }
 
 - (void)show {
-    if (self.sessionEmail.length && [[NSDate date] timeIntervalSince1970] < self.accountWindowSuppressedUntil) {
+    // A successful login is already reflected in the main window. Opening the
+    // account entry again must not bring the login form back over the editor.
+    if (self.sessionEmail.length) {
+        [[NSNotificationCenter defaultCenter] postNotificationName:@"MbsLocalAccountDidChange"
+                                                            object:nil
+                                                          userInfo:@{@"signedIn": @YES,
+                                                                     @"email": self.sessionEmail}];
         [self.window orderOut:nil];
         [self.window resignKeyWindow];
         [self showStatusPanel];
@@ -373,7 +378,6 @@ static NSTextField *AccountLabel(NSView *view, NSString *text, NSRect frame) {
             } else {
                 MbsDeleteRememberedCredentials();
             }
-            strongSelf.accountWindowSuppressedUntil = [[NSDate date] timeIntervalSince1970] + 5.0;
             strongSelf.status.stringValue = [NSString stringWithFormat:@"已登录：%@", strongSelf.sessionEmail];
             [strongSelf.window orderOut:nil];
             [strongSelf.window resignKeyWindow];
