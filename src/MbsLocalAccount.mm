@@ -114,6 +114,7 @@ willPerformHTTPRedirection:(NSHTTPURLResponse *)response
 @property(nonatomic, assign) NSTimeInterval accountWindowSuppressedUntil;
 + (instancetype)shared;
 - (void)show;
+- (void)restoreRememberedCredentials;
 - (void)submit:(id)sender;
 - (void)changeMode:(id)sender;
 - (void)logout:(id)sender;
@@ -135,6 +136,16 @@ static NSTextField *AccountLabel(NSView *view, NSString *text, NSRect frame) {
         controller = [MbsLocalAccountController new];
     });
     return controller;
+}
+
+- (void)restoreRememberedCredentials {
+    if (!self.email || !self.password || !self.remember) return;
+    NSDictionary *saved = MbsLoadRememberedCredentials();
+    NSString *savedEmail = [saved[@"email"] isKindOfClass:NSString.class] ? saved[@"email"] : nil;
+    NSString *savedPassword = [saved[@"password"] isKindOfClass:NSString.class] ? saved[@"password"] : nil;
+    if (savedEmail.length && !self.email.stringValue.length) self.email.stringValue = savedEmail;
+    if (savedPassword.length && !self.password.stringValue.length) self.password.stringValue = savedPassword;
+    if (savedEmail.length && savedPassword.length) self.remember.state = NSControlStateValueOn;
 }
 
 - (void)hideStatusPanel {
@@ -246,14 +257,7 @@ static NSTextField *AccountLabel(NSView *view, NSString *text, NSRect frame) {
         self.remember.state = NSControlStateValueOff;
         [view addSubview:self.remember];
 
-        NSDictionary *saved = MbsLoadRememberedCredentials();
-        NSString *savedEmail = [saved[@"email"] isKindOfClass:NSString.class] ? saved[@"email"] : nil;
-        NSString *savedPassword = [saved[@"password"] isKindOfClass:NSString.class] ? saved[@"password"] : nil;
-        if (savedEmail.length) self.email.stringValue = savedEmail;
-        if (savedPassword.length) {
-            self.password.stringValue = savedPassword;
-            self.remember.state = NSControlStateValueOn;
-        }
+        [self restoreRememberedCredentials];
 
         self.status = AccountLabel(view, @"未登录。登录只连接 Mbs Office 账号服务。", NSMakeRect(24, 75, 522, 87));
 
@@ -269,6 +273,7 @@ static NSTextField *AccountLabel(NSView *view, NSString *text, NSRect frame) {
         [view addSubview:self.logout];
         [self changeMode:nil];
     }
+    [self restoreRememberedCredentials];
     [NSApp activateIgnoringOtherApps:YES];
     [self.window makeKeyAndOrderFront:nil];
 }
