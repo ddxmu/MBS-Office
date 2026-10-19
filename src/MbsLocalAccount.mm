@@ -1,9 +1,59 @@
 #import <AppKit/AppKit.h>
+#import <Security/Security.h>
 #import "MbsLocalAccount.h"
 
 static NSString *MbsLoginURLString = @"https://ttys.ddxmu.com/api/mbs/login";
 static NSString *MbsLogoutURLString = @"https://ttys.ddxmu.com/api/mbs/logout";
 static NSString *MbsRegisterURLString = @"https://ttys.ddxmu.com/mbs/register";
+static NSString *MbsRememberedCredentialsService = @"com.mbs.office.account";
+static NSString *MbsRememberedCredentialsAccount = @"remembered-login";
+
+static NSDictionary *MbsLoadRememberedCredentials(void) {
+    NSDictionary *query = @{
+        (__bridge id)kSecClass: (__bridge id)kSecClassGenericPassword,
+        (__bridge id)kSecAttrService: MbsRememberedCredentialsService,
+        (__bridge id)kSecAttrAccount: MbsRememberedCredentialsAccount,
+        (__bridge id)kSecReturnData: @YES,
+        (__bridge id)kSecMatchLimit: (__bridge id)kSecMatchLimitOne
+    };
+    CFTypeRef result = NULL;
+    OSStatus status = SecItemCopyMatching((__bridge CFDictionaryRef)query, &result);
+    if (status != errSecSuccess || !result) return nil;
+    NSData *data = CFBridgingRelease(result);
+    NSDictionary *credentials = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+    return [credentials isKindOfClass:NSDictionary.class] ? credentials : nil;
+}
+
+static void MbsSaveRememberedCredentials(NSString *email, NSString *password) {
+    if (!email.length || !password.length) return;
+    NSData *data = [NSJSONSerialization dataWithJSONObject:@{ @"email": email, @"password": password }
+                                                         options:0 error:nil];
+    if (!data) return;
+    NSDictionary *query = @{
+        (__bridge id)kSecClass: (__bridge id)kSecClassGenericPassword,
+        (__bridge id)kSecAttrService: MbsRememberedCredentialsService,
+        (__bridge id)kSecAttrAccount: MbsRememberedCredentialsAccount
+    };
+    NSDictionary *attributes = @{
+        (__bridge id)kSecValueData: data,
+        (__bridge id)kSecAttrAccessible: (__bridge id)kSecAttrAccessibleAfterFirstUnlock
+    };
+    OSStatus status = SecItemUpdate((__bridge CFDictionaryRef)query, (__bridge CFDictionaryRef)attributes);
+    if (status == errSecItemNotFound) {
+        NSMutableDictionary *item = [query mutableCopy];
+        [item addEntriesFromDictionary:attributes];
+        SecItemAdd((__bridge CFDictionaryRef)item, NULL);
+    }
+}
+
+static void MbsDeleteRememberedCredentials(void) {
+    NSDictionary *query = @{
+        (__bridge id)kSecClass: (__bridge id)kSecClassGenericPassword,
+        (__bridge id)kSecAttrService: MbsRememberedCredentialsService,
+        (__bridge id)kSecAttrAccount: MbsRememberedCredentialsAccount
+    };
+    SecItemDelete((__bridge CFDictionaryRef)query);
+}
 
 static NSString *NormalizedEmail(NSString *email) {
     return [[email stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet] lowercaseString];
@@ -51,6 +101,7 @@ willPerformHTTPRedirection:(NSHTTPURLResponse *)response
 @property(nonatomic, strong) NSTextField *status;
 @property(nonatomic, strong) NSButton *submit;
 @property(nonatomic, strong) NSButton *logout;
+@property(nonatomic, strong) NSButton *remember;
 @property(nonatomic, copy) NSString *sessionEmail;
 @property(nonatomic, copy) NSString *sessionToken;
 @property(nonatomic, strong) NSURLSession *session;
@@ -59,6 +110,7 @@ willPerformHTTPRedirection:(NSHTTPURLResponse *)response
 @property(nonatomic, strong) NSTextField *statusLabel;
 @property(nonatomic, weak) NSWindow *statusHostWindow;
 @property(nonatomic, strong) NSTextField *statusView;
+@property(nonatomic, strong) NSTimer *statusDismissTimer;
 @property(nonatomic, assign) NSTimeInterval accountWindowSuppressedUntil;
 + (instancetype)shared;
 - (void)show;
@@ -86,6 +138,8 @@ static NSTextField *AccountLabel(NSView *view, NSString *text, NSRect frame) {
 }
 
 - (void)hideStatusPanel {
+    [self.statusDismissTimer invalidate];
+    self.statusDismissTimer = nil;
     [self.statusPanel orderOut:nil];
     [self.statusView removeFromSuperview];
     self.statusHostWindow = nil;
@@ -97,7 +151,7 @@ static NSTextField *AccountLabel(NSView *view, NSString *text, NSRect frame) {
         return;
     }
     if (!self.statusPanel) {
-        self.statusPanel = [[NSPanel alloc] initWithContentRect:NSMakeRect(0, 0, 440, 48)
+        self.statusPanel = [[NSPanel alloc] initWithContentRect:NSMakeRect(0, 0, 240, 30)
                                                         styleMask:NSWindowStyleMaskBorderless
                                                           backing:NSBackingStoreBuffered
                                                             defer:NO];
@@ -114,12 +168,12 @@ static NSTextField *AccountLabel(NSView *view, NSString *text, NSRect frame) {
         background.blendingMode = NSVisualEffectBlendingModeBehindWindow;
         background.state = NSVisualEffectStateActive;
         background.wantsLayer = YES;
-        background.layer.cornerRadius = 10.0;
+        background.layer.cornerRadius = 6.0;
         [self.statusPanel.contentView addSubview:background];
         self.statusLabel = [NSTextField labelWithString:@""];
         self.statusLabel.alignment = NSTextAlignmentCenter;
-        self.statusLabel.font = [NSFont systemFontOfSize:15.0 weight:NSFontWeightMedium];
-        self.statusLabel.frame = NSMakeRect(12, 12, 416, 24);
+        self.statusLabel.font = [NSFont systemFontOfSize:11.0 weight:NSFontWeightMedium];
+        self.statusLabel.frame = NSMakeRect(8, 7, 224, 16);
         [self.statusPanel.contentView addSubview:self.statusLabel];
     }
     NSWindow *main = nil;
@@ -141,6 +195,12 @@ static NSTextField *AccountLabel(NSView *view, NSString *text, NSRect frame) {
         [main addChildWindow:self.statusPanel ordered:NSWindowAbove];
     }
     [self.statusPanel orderFrontRegardless];
+    [self.statusDismissTimer invalidate];
+    self.statusDismissTimer = [NSTimer scheduledTimerWithTimeInterval:3.0
+                                                                 target:self
+                                                               selector:@selector(hideStatusPanel)
+                                                               userInfo:nil
+                                                                repeats:NO];
 }
 
 - (void)show {
@@ -180,6 +240,20 @@ static NSTextField *AccountLabel(NSView *view, NSString *text, NSRect frame) {
         self.password = [[NSSecureTextField alloc] initWithFrame:NSMakeRect(121, 222, 425, 28)];
         self.password.placeholderString = @"至少 8 个字符";
         [view addSubview:self.password];
+
+        self.remember = [NSButton checkboxWithTitle:@"记住账号密码" target:nil action:nil];
+        self.remember.frame = NSMakeRect(121, 182, 180, 24);
+        self.remember.state = NSControlStateValueOff;
+        [view addSubview:self.remember];
+
+        NSDictionary *saved = MbsLoadRememberedCredentials();
+        NSString *savedEmail = [saved[@"email"] isKindOfClass:NSString.class] ? saved[@"email"] : nil;
+        NSString *savedPassword = [saved[@"password"] isKindOfClass:NSString.class] ? saved[@"password"] : nil;
+        if (savedEmail.length) self.email.stringValue = savedEmail;
+        if (savedPassword.length) {
+            self.password.stringValue = savedPassword;
+            self.remember.state = NSControlStateValueOn;
+        }
 
         self.status = AccountLabel(view, @"未登录。登录只连接 Mbs Office 账号服务。", NSMakeRect(24, 75, 522, 87));
 
@@ -289,6 +363,11 @@ static NSTextField *AccountLabel(NSView *view, NSString *text, NSRect frame) {
         if (token.length && user[@"email"]) {
             strongSelf.sessionToken = token;
             strongSelf.sessionEmail = user[@"email"];
+            if (strongSelf.remember.state == NSControlStateValueOn) {
+                MbsSaveRememberedCredentials(email, password);
+            } else {
+                MbsDeleteRememberedCredentials();
+            }
             strongSelf.accountWindowSuppressedUntil = [[NSDate date] timeIntervalSince1970] + 5.0;
             strongSelf.status.stringValue = [NSString stringWithFormat:@"已登录：%@", strongSelf.sessionEmail];
             [strongSelf.window orderOut:nil];
