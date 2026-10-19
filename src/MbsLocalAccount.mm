@@ -151,7 +151,7 @@ static NSTextField *AccountLabel(NSView *view, NSString *text, NSRect frame) {
         return;
     }
     if (!self.statusPanel) {
-        self.statusPanel = [[NSPanel alloc] initWithContentRect:NSMakeRect(0, 0, 240, 30)
+        self.statusPanel = [[NSPanel alloc] initWithContentRect:NSMakeRect(0, 0, 220, 24)
                                                         styleMask:NSWindowStyleMaskBorderless
                                                           backing:NSBackingStoreBuffered
                                                             defer:NO];
@@ -168,12 +168,12 @@ static NSTextField *AccountLabel(NSView *view, NSString *text, NSRect frame) {
         background.blendingMode = NSVisualEffectBlendingModeBehindWindow;
         background.state = NSVisualEffectStateActive;
         background.wantsLayer = YES;
-        background.layer.cornerRadius = 6.0;
+        background.layer.cornerRadius = 5.0;
         [self.statusPanel.contentView addSubview:background];
         self.statusLabel = [NSTextField labelWithString:@""];
         self.statusLabel.alignment = NSTextAlignmentCenter;
-        self.statusLabel.font = [NSFont systemFontOfSize:11.0 weight:NSFontWeightMedium];
-        self.statusLabel.frame = NSMakeRect(8, 7, 224, 16);
+        self.statusLabel.font = [NSFont systemFontOfSize:10.0 weight:NSFontWeightMedium];
+        self.statusLabel.frame = NSMakeRect(6, 5, 208, 14);
         [self.statusPanel.contentView addSubview:self.statusLabel];
     }
     NSWindow *main = nil;
