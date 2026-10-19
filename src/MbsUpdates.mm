@@ -205,8 +205,8 @@ static NSURL *MbsInstallerURL(NSBundle *outer)
 {
     if (!outer) return nil;
     NSArray<NSString *> *paths = @[
-        @"Contents/Resources/MbsEngine.app/Contents/Resources/MbsModuleInstaller",
-        @"Contents/Resources/MbsModuleInstaller"
+        @"Contents/Resources/MbsModuleInstaller",
+        @"Contents/Resources/MbsEngine.app/Contents/Resources/MbsModuleInstaller"
     ];
     for (NSString *path in paths) {
         NSURL *candidate = [outer.bundleURL URLByAppendingPathComponent:path];
