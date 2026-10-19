@@ -123,12 +123,10 @@ static kso_qt::QString rebrandUi(kso_qt::QString &translated, const char *contex
         return uiString(updated);
     }
     if ([text containsString:@"灵犀"] && !isLegalText(text)) {
-        NSString *updated = [text stringByReplacingOccurrencesOfString:@"Mbs 灵犀" withString:@"超级派"];
-        updated = [updated stringByReplacingOccurrencesOfString:@"灵犀" withString:@"超级派"];
-        updated = [updated stringByReplacingOccurrencesOfString:@"WPS 超级派" withString:@"超级派"];
-        updated = [updated stringByReplacingOccurrencesOfString:@"Mbs 超级派" withString:@"超级派"];
+        // The legacy assistant entry is removed from Mbs Office. Returning an
+        // empty UI string prevents its sidebar/menu label from being shown.
         translated = uiString(@"");
-        return uiString(updated);
+        return uiString(@"");
     }
     if ([text containsString:@"WPS"] && !isLegalText(text) &&
         !isLegalText(sourceText) && !isLegalText(contextText) &&

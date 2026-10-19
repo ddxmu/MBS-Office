@@ -65,13 +65,12 @@ static NSString *MbsAccountInitialForEmail(NSString *email) {
     NSRange first = [local rangeOfComposedCharacterSequenceAtIndex:0];
     return [[local substringWithRange:first] uppercaseString];
 }
+static BOOL isRemovedAssistantText(NSString *text) {
+    return [text containsString:@"灵犀"] || [text containsString:@"超级派"];
+}
 static NSString *updated(NSString *text) {
+    if (isRemovedAssistantText(text)) return @"";
     NSString *result = [text stringByReplacingOccurrencesOfString:@"免费使用企业版" withString:@"版本升级"];
-    result = [result stringByReplacingOccurrencesOfString:@"WPS 灵犀" withString:@"超级派"];
-    result = [result stringByReplacingOccurrencesOfString:@"Mbs 灵犀" withString:@"超级派"];
-    result = [result stringByReplacingOccurrencesOfString:@"灵犀" withString:@"超级派"];
-    result = [result stringByReplacingOccurrencesOfString:@"WPS 超级派" withString:@"超级派"];
-    result = [result stringByReplacingOccurrencesOfString:@"Mbs 超级派" withString:@"超级派"];
     const char *email = MbsCurrentAccountEmail();
     if (email && ([result containsString:@"立即登录"] || [result isEqualToString:@"登录"])) {
         result = MbsAccountInitialForEmail([NSString stringWithUTF8String:email]);
@@ -79,8 +78,9 @@ static NSString *updated(NSString *text) {
     free((void *)email);
     return result;
 }
-static BOOL isSuperPiText(NSString *text) {
-    return [text containsString:@"灵犀"] || [text containsString:@"超级派"];
+static BOOL isUpgradeText(NSString *text) {
+    NSString *value = [text stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    return [value isEqualToString:@"升级"] || [value isEqualToString:@"版本升级"];
 }
 static BOOL isBlockedRemoteHost(NSString *host) {
     return [host isEqualToString:@"personal.local.wps.cn"] ||
@@ -94,19 +94,10 @@ static BOOL isLegacyAssistantHost(NSString *host) {
 static BOOL isLegacyUpgradeHost(NSString *host) {
     return [host isEqualToString:@"plus.wps.cn"];
 }
-static void MbsOpenSuperPi(void) {
-    dispatch_async(dispatch_get_main_queue(), ^{
-        NSURL *url = [NSURL URLWithString:@"https://superpi.ddxmu.com/"];
-        if (url) [[NSWorkspace sharedWorkspace] openURL:url];
-    });
-}
 static IMP MbsWorkspaceOpenURLOriginal;
 static BOOL MbsWorkspaceOpenURL(id self, SEL selector, NSURL *url) {
     NSString *host = url.host.lowercaseString;
-    if (isLegacyAssistantHost(host)) {
-        MbsOpenSuperPi();
-        return YES;
-    }
+    if (isLegacyAssistantHost(host)) return YES;
     if (isLegacyUpgradeHost(host)) {
         MbsShowUpdates();
         return YES;
@@ -199,12 +190,8 @@ static bool routeClick(kso_qt::QObject*receiver,kso_qt::QEvent*event) {
             kso_qt::QObject*object=receiver;
             for(int depth=0;object&&depth<7;++depth) {
                 NSString *name=className(object),*text=property(object,"text");
-                if (isSuperPiText(text)) {
-                    MbsOpenSuperPi();return true;
-                }
-                if([name isEqualToString:@"K365AppEntryWidget"]||[name isEqualToString:@"K365AppEntry"]||
-                   [name isEqualToString:@"KEnterpriseIntroWidget"]||[text containsString:@"免费使用企业版"]||
-                   [text containsString:@"版本升级"] || [text isEqualToString:@"升级"]) {
+                if (isRemovedAssistantText(text)) return true;
+                if (isUpgradeText(text)) {
                     MbsShowUpdates();return true;
                 }
                 void *data=nullptr;memcpy(&data,(char*)object+8,8);
@@ -217,11 +204,8 @@ static bool routeClick(kso_qt::QObject*receiver,kso_qt::QEvent*event) {
 }
 static void buttonMouseRelease(kso_qt::QAbstractButton *button,kso_qt::QMouseEvent *event) {
     NSString *text=property((kso_qt::QObject*)button,"text");
-    if (isSuperPiText(text)) {
-        MbsOpenSuperPi();
-        return;
-    }
-    if ([text containsString:@"版本升级"] || [text isEqualToString:@"升级"]) {
+    if (isRemovedAssistantText(text)) return;
+    if (isUpgradeText(text)) {
         MbsShowUpdates();
         return;
     }
@@ -234,10 +218,8 @@ static void buttonMouseRelease(kso_qt::QAbstractButton *button,kso_qt::QMouseEve
 }
 static bool maybeShowLocalAccount(void *button) {
     NSString *text=property((kso_qt::QObject*)button,"text");
-    if (isSuperPiText(text)) {
-        MbsOpenSuperPi(); return true;
-    }
-    if ([text containsString:@"版本升级"] || [text isEqualToString:@"升级"]) {
+    if (isRemovedAssistantText(text)) return true;
+    if (isUpgradeText(text)) {
         MbsShowUpdates(); return true;
     }
     if ([text containsString:@"立即登录"] || [text isEqualToString:@"登录"]) {
@@ -283,6 +265,7 @@ static bool desktopOpenUrl(const void *url) {
     if (url) {
         auto hostValue = qurlHostOriginal(url, 0);
         NSString *host = read(hostValue);
+        if (isLegacyAssistantHost(host)) return true;
         if (isLegacyUpgradeHost(host)) {
             MbsShowUpdates();
             return true;
@@ -326,21 +309,9 @@ static void InstallMbsLoginMouseMonitor(void) {
             NSRect bounds=content ? content.bounds : NSZeroRect;
             BOOL isMbsAiWindow = [window.title isEqualToString:@"AI 设置"] ||
                                  [window.title isEqualToString:@"AI"];
-            if (bounds.size.width > 600 && bounds.size.height > 300) {
-                CGFloat xRatio = point.x / bounds.size.width;
-                CGFloat yRatio = point.y / bounds.size.height;
-                BOOL isHome = [window.title isEqualToString:@"首页"];
-                BOOL bottomUpgrade = isHome && xRatio >= 0.05 && xRatio <= 0.30 && yRatio <= 0.12;
-                BOOL topUpgrade = xRatio >= 0.70 && xRatio <= 0.86 && yRatio >= 0.88;
-                if (bottomUpgrade || topUpgrade) {
-                    MbsShowUpdates();
-                    return (NSEvent *)nil;
-                }
-            }
             // The vendor header can swallow the button event before the
-            // Qt-level hook sees it. Keep a small text-sized fallback for
-            // the top-right login label only; adjacent avatar and toolbar
-            // controls stay outside this rectangle.
+            // Qt-level hook sees it. Do not use a coordinate-wide upgrade
+            // fallback: neighboring header controls must remain ordinary.
             BOOL isLoginLabelHit = !isMbsAiWindow && bounds.size.width > 600 &&
                 bounds.size.height > 300 && point.x >= NSMaxX(bounds)-170 &&
                 point.y >= NSMaxY(bounds)-175 && point.y <= NSMaxY(bounds)-5;

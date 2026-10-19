@@ -46,9 +46,10 @@ static NSString *bundledAddon(NSString *value) {
     if (![value hasPrefix:@"/addons/"]) return nil;
     NSString *lower = value.lowercaseString;
     if ([lower hasPrefix:@"/addons/knewdocs/"] ||
-        [lower hasPrefix:@"/addons/kpromeaccountpanel/"]) {
+        [lower hasPrefix:@"/addons/kpromeaccountpanel/"] ||
+        [lower hasPrefix:@"/addons/klingxidockpanel/"]) {
         // Mbs owns the start page and account flow. Keep the editor core intact,
-        // but prevent these two legacy web plugins from opening their remote pages.
+        // but prevent legacy remote pages and the old robot assistant panel from loading.
         return @"/__mbs_disabled_remote_addon__";
     }
     NSString *base=[NSBundle.mainBundle.privateFrameworksPath stringByAppendingPathComponent:@"office6"];
@@ -61,7 +62,8 @@ static NSString *bundledResource(NSString *value) {
     if (![value hasPrefix:@"/addons/"]) return nil;
     NSString *lower = value.lowercaseString;
     if ([lower hasPrefix:@"/addons/knewdocs/"] ||
-        [lower hasPrefix:@"/addons/kpromeaccountpanel/"]) {
+        [lower hasPrefix:@"/addons/kpromeaccountpanel/"] ||
+        [lower hasPrefix:@"/addons/klingxidockpanel/"]) {
         return @"/__mbs_disabled_remote_addon__";
     }
     NSString *base=[NSBundle.mainBundle.resourcePath stringByAppendingPathComponent:@"office6"];
