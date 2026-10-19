@@ -127,21 +127,35 @@ static NSDictionary *MbsUpdateCandidate(NSDictionary *release, NSString *current
         return nil;
     NSArray *assets = release[@"assets"];
     if (![assets isKindOfClass:NSArray.class]) return nil;
-    NSString *name = [NSString stringWithFormat:@"MbsOffice-modules-%@.zip",version];
-    NSDictionary *module = nil, *signature = nil, *checksums = nil;
+    NSString *legacyName = [NSString stringWithFormat:@"MbsOffice-modules-%@.zip",version];
+    NSString *compatibleName = [NSString stringWithFormat:@"MbsOffice-modules-%@-from-%@.zip",version,current];
+    NSArray<NSString *> *candidateNames = @[compatibleName,legacyName];
+    NSMutableDictionary<NSString *,NSDictionary *> *assetsByName = [NSMutableDictionary dictionary];
+    NSDictionary *checksums = nil;
     for (id item in assets) {
         if (![item isKindOfClass:NSDictionary.class]) continue;
-        if ([item[@"name"] isEqual:name]) {
-            if (module) return nil;
-            module = item;
+        NSString *assetName = item[@"name"];
+        if (![assetName isKindOfClass:NSString.class]) continue;
+        if ([candidateNames containsObject:assetName] ||
+            [candidateNames containsObject:[assetName stringByDeletingPathExtension]]) {
+            if (assetsByName[assetName]) return nil;
+            assetsByName[assetName] = item;
         }
-        if ([item[@"name"] isEqual:[name stringByAppendingString:@".sig"]]) {
-            if (signature) return nil;
-            signature = item;
-        }
-        if ([item[@"name"] isEqual:@"checksums.sha256"]) {
+        if ([assetName isEqual:@"checksums.sha256"]) {
             if (checksums) return nil;
             checksums = item;
+        }
+    }
+    NSString *name = nil;
+    NSDictionary *module = nil, *signature = nil;
+    for (NSString *candidateName in candidateNames) {
+        NSDictionary *candidateModule = assetsByName[candidateName];
+        NSDictionary *candidateSignature = assetsByName[[candidateName stringByAppendingString:@".sig"]];
+        if (candidateModule && candidateSignature) {
+            name = candidateName;
+            module = candidateModule;
+            signature = candidateSignature;
+            break;
         }
     }
     if (!module || ![module[@"size"] isKindOfClass:NSNumber.class] ||
@@ -183,6 +197,20 @@ static NSBundle *MbsOuterBundle(void)
             if ([bundle.bundleIdentifier isEqualToString:@"com.mbs.office.launcher"]) return bundle;
         }
         url = url.URLByDeletingLastPathComponent;
+    }
+    return nil;
+}
+
+static NSURL *MbsInstallerURL(NSBundle *outer)
+{
+    if (!outer) return nil;
+    NSArray<NSString *> *paths = @[
+        @"Contents/Resources/MbsEngine.app/Contents/Resources/MbsModuleInstaller",
+        @"Contents/Resources/MbsModuleInstaller"
+    ];
+    for (NSString *path in paths) {
+        NSURL *candidate = [outer.bundleURL URLByAppendingPathComponent:path];
+        if ([NSFileManager.defaultManager isExecutableFileAtPath:candidate.path]) return candidate;
     }
     return nil;
 }
@@ -246,7 +274,7 @@ static NSBundle *MbsOuterBundle(void)
         frame:NSMakeRect(24,252,260,22)];
     self.latestLabel = [self label:@"最新版本：尚未检查" frame:NSMakeRect(294,252,262,22)];
     self.statusLabel = [self label:@"尚未检查更新。" frame:NSMakeRect(24,174,532,64)];
-    [self label:@"此处仅更新 Mbs 自研模块。下载完成后，保存文档并退出应用即可自动安装并重启。"
+    [self label:@"此处仅更新 Mbs 自研模块。下载完成后会正常退出应用，按提示保存文档后自动安装并重启。"
         frame:NSMakeRect(24,71,532,40)].textColor = NSColor.secondaryLabelColor;
     self.progress = [[NSProgressIndicator alloc] initWithFrame:NSMakeRect(24,134,532,16)];
     self.progress.style = NSProgressIndicatorStyleBar;
@@ -363,7 +391,7 @@ static NSBundle *MbsOuterBundle(void)
 - (void)startInstaller
 {
     NSBundle *outer = MbsOuterBundle();
-    NSURL *installer = [outer.bundleURL URLByAppendingPathComponent:@"Contents/Resources/MbsModuleInstaller"];
+    NSURL *installer = MbsInstallerURL(outer);
     if (!outer || !self.downloadedURL || !self.downloadedSignatureURL ||
         ![NSFileManager.defaultManager isExecutableFileAtPath:installer.path]) {
         [self downloadFailed:@"安装器不可用，更新文件已保留但未安装。请重新安装最新版 Mbs Office。"];
@@ -385,11 +413,17 @@ static NSBundle *MbsOuterBundle(void)
     }
     self.installerTask = task;
     self.installing = YES;
-    self.statusLabel.stringValue = @"更新已校验。请保存文档并退出 Mbs Office，安装器会自动安装并重启。";
+    self.statusLabel.stringValue = @"更新已校验，正在退出 Mbs Office；如有未保存文档请按提示保存，随后会自动安装并重启。";
     [self.progress stopAnimation:nil];
     [self refreshButtons];
     self.upgradeButton.title = @"等待重启";
     self.upgradeButton.enabled = NO;
+    // Keep the normal application termination path so unsaved documents still
+    // get the native save prompt; the installer waits for this process to exit.
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        if (self.installing) [NSApp terminate:nil];
+    });
 }
 - (void)beginDownload:(NSString *)digest
 {
