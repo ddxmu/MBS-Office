@@ -376,15 +376,6 @@ static NSTextField *AccountLabel(NSView *view, NSString *text, NSRect frame) {
             [[NSNotificationCenter defaultCenter] postNotificationName:@"MbsLocalAccountDidChange"
                                                                 object:nil
                                                               userInfo:@{@"signedIn": @YES, @"email": strongSelf.sessionEmail}];
-            dispatch_async(dispatch_get_main_queue(), ^{
-                [strongSelf.window orderOut:nil];
-                [strongSelf.window resignKeyWindow];
-                [strongSelf showStatusPanel];
-            });
-            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-                [strongSelf.window orderOut:nil];
-                [strongSelf showStatusPanel];
-            });
         } else {
             strongSelf.status.stringValue = message ?: @"登录失败，请稍后重试。";
         }
