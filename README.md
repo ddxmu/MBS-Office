@@ -12,7 +12,7 @@
 
 ## 编译
 
-需要 macOS 13+、Apple Silicon 与 Xcode Command Line Tools。运行 `./scripts/build.sh` 编译自研模块动态库。此动态库需要由宿主程序调用头文件中的 C 接口，不包含文档编辑器。
+需要 macOS 13+、Apple Silicon 与 Xcode Command Line Tools。运行 `./scripts/build.sh` 编译自研模块动态库和签名校验安装器。动态库需要由宿主程序调用头文件中的 C 接口，不包含文档编辑器。
 
 ## AI 接口
 
