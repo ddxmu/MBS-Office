@@ -9,6 +9,8 @@ const char *MbsLocalAccountCapabilities(void);
 // Caller owns this UTF-8 JSON buffer and must free() it. No password is returned.
 char *MbsCopyLocalAccountState(void);
 void MbsLocalAccountSignOut(void);
+// Returns the current signed-in email for native header/status updates.
+const char *MbsCurrentAccountEmail(void);
 #ifdef __cplusplus
 }
 #endif

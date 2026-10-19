@@ -55,6 +55,11 @@ willPerformHTTPRedirection:(NSHTTPURLResponse *)response
 @property(nonatomic, copy) NSString *sessionToken;
 @property(nonatomic, strong) NSURLSession *session;
 @property(nonatomic, strong) MbsRedirectGuard *redirectGuard;
+@property(nonatomic, strong) NSPanel *statusPanel;
+@property(nonatomic, strong) NSTextField *statusLabel;
+@property(nonatomic, weak) NSWindow *statusHostWindow;
+@property(nonatomic, strong) NSTextField *statusView;
+@property(nonatomic, assign) NSTimeInterval accountWindowSuppressedUntil;
 + (instancetype)shared;
 - (void)show;
 - (void)submit:(id)sender;
@@ -80,7 +85,71 @@ static NSTextField *AccountLabel(NSView *view, NSString *text, NSRect frame) {
     return controller;
 }
 
+- (void)hideStatusPanel {
+    [self.statusPanel orderOut:nil];
+    [self.statusView removeFromSuperview];
+    self.statusHostWindow = nil;
+}
+
+- (void)showStatusPanel {
+    if (!self.sessionEmail.length) {
+        [self hideStatusPanel];
+        return;
+    }
+    if (!self.statusPanel) {
+        self.statusPanel = [[NSPanel alloc] initWithContentRect:NSMakeRect(0, 0, 440, 48)
+                                                        styleMask:NSWindowStyleMaskBorderless
+                                                          backing:NSBackingStoreBuffered
+                                                            defer:NO];
+        self.statusPanel.level = NSFloatingWindowLevel;
+        self.statusPanel.opaque = NO;
+        self.statusPanel.backgroundColor = NSColor.clearColor;
+        self.statusPanel.hasShadow = YES;
+        self.statusPanel.ignoresMouseEvents = YES;
+        self.statusPanel.collectionBehavior = NSWindowCollectionBehaviorCanJoinAllSpaces |
+                                               NSWindowCollectionBehaviorFullScreenAuxiliary;
+        NSVisualEffectView *background = [[NSVisualEffectView alloc] initWithFrame:self.statusPanel.contentView.bounds];
+        background.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+        background.material = NSVisualEffectMaterialHeaderView;
+        background.blendingMode = NSVisualEffectBlendingModeBehindWindow;
+        background.state = NSVisualEffectStateActive;
+        background.wantsLayer = YES;
+        background.layer.cornerRadius = 10.0;
+        [self.statusPanel.contentView addSubview:background];
+        self.statusLabel = [NSTextField labelWithString:@""];
+        self.statusLabel.alignment = NSTextAlignmentCenter;
+        self.statusLabel.font = [NSFont systemFontOfSize:15.0 weight:NSFontWeightMedium];
+        self.statusLabel.frame = NSMakeRect(12, 12, 416, 24);
+        [self.statusPanel.contentView addSubview:self.statusLabel];
+    }
+    NSWindow *main = nil;
+    for (NSWindow *candidate in NSApp.windows) {
+        if (candidate != self.window && candidate != self.statusPanel && candidate.isVisible &&
+            candidate.frame.size.width > 600 && candidate.frame.size.height > 300) {
+            main = candidate;
+            break;
+        }
+    }
+    self.statusLabel.stringValue = [NSString stringWithFormat:@"已登录：%@", self.sessionEmail];
+    NSRect target = main ? main.frame : NSScreen.mainScreen.visibleFrame;
+    NSRect frame = self.statusPanel.frame;
+    frame.origin.x = NSMaxX(target) - frame.size.width - 24;
+    frame.origin.y = NSMaxY(target) - frame.size.height - 68;
+    [self.statusPanel setFrame:frame display:NO];
+    if (main && self.statusPanel.parentWindow != main) {
+        [self.statusPanel.parentWindow removeChildWindow:self.statusPanel];
+        [main addChildWindow:self.statusPanel ordered:NSWindowAbove];
+    }
+    [self.statusPanel orderFrontRegardless];
+}
+
 - (void)show {
+    if (self.sessionEmail.length && [[NSDate date] timeIntervalSince1970] < self.accountWindowSuppressedUntil) {
+        [self.window orderOut:nil];
+        [self.window resignKeyWindow];
+        [self showStatusPanel];
+        return;
+    }
     if (!self.window) {
         self.window = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 570, 440)
                                                    styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskMiniaturizable
@@ -220,10 +289,23 @@ static NSTextField *AccountLabel(NSView *view, NSString *text, NSRect frame) {
         if (token.length && user[@"email"]) {
             strongSelf.sessionToken = token;
             strongSelf.sessionEmail = user[@"email"];
+            strongSelf.accountWindowSuppressedUntil = [[NSDate date] timeIntervalSince1970] + 5.0;
             strongSelf.status.stringValue = [NSString stringWithFormat:@"已登录：%@", strongSelf.sessionEmail];
+            [strongSelf.window orderOut:nil];
+            [strongSelf.window resignKeyWindow];
+            [strongSelf showStatusPanel];
             [[NSNotificationCenter defaultCenter] postNotificationName:@"MbsLocalAccountDidChange"
                                                                 object:nil
                                                               userInfo:@{@"signedIn": @YES, @"email": strongSelf.sessionEmail}];
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [strongSelf.window orderOut:nil];
+                [strongSelf.window resignKeyWindow];
+                [strongSelf showStatusPanel];
+            });
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                [strongSelf.window orderOut:nil];
+                [strongSelf showStatusPanel];
+            });
         } else {
             strongSelf.status.stringValue = message ?: @"登录失败，请稍后重试。";
         }
@@ -240,6 +322,7 @@ static NSTextField *AccountLabel(NSView *view, NSString *text, NSRect frame) {
     self.sessionEmail = nil;
     self.password.stringValue = @"";
     self.status.stringValue = @"已退出登录。";
+    [self hideStatusPanel];
     self.logout.enabled = NO;
     [[NSNotificationCenter defaultCenter] postNotificationName:@"MbsLocalAccountDidChange"
                                                         object:nil
@@ -288,4 +371,11 @@ char *MbsCopyLocalAccountState(void) {
 
 void MbsLocalAccountSignOut(void) {
     dispatch_async(dispatch_get_main_queue(), ^{ [[MbsLocalAccountController shared] logout:nil]; });
+}
+
+const char *MbsCurrentAccountEmail(void) {
+    __block NSString *email = nil;
+    void (^readEmail)(void) = ^{ email = [[MbsLocalAccountController shared].sessionEmail copy]; };
+    if (NSThread.isMainThread) readEmail(); else dispatch_sync(dispatch_get_main_queue(), readEmail);
+    return email.length ? strdup(email.UTF8String) : NULL;
 }

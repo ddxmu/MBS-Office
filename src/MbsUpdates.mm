@@ -1,5 +1,6 @@
 #import <AppKit/AppKit.h>
 #import <CommonCrypto/CommonDigest.h>
+#include <unistd.h>
 #include "MbsUpdates.h"
 
 static NSString *MbsVersion(id value, BOOL allowTagPrefix)
@@ -108,6 +109,15 @@ static NSString *MbsChecksumForAsset(NSData *data, NSString *name)
     return result;
 }
 
+static BOOL MbsSignatureDataValid(NSData *data)
+{
+    if (!data.length || data.length > 4096) return NO;
+    NSString *encoded = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+    encoded = [encoded stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    NSData *signature = encoded.length ? [[NSData alloc] initWithBase64EncodedString:encoded options:0] : nil;
+    return signature.length == 64;
+}
+
 static NSDictionary *MbsUpdateCandidate(NSDictionary *release, NSString *current)
 {
     NSString *version = MbsVersion(release[@"tag_name"],YES);
@@ -118,12 +128,16 @@ static NSDictionary *MbsUpdateCandidate(NSDictionary *release, NSString *current
     NSArray *assets = release[@"assets"];
     if (![assets isKindOfClass:NSArray.class]) return nil;
     NSString *name = [NSString stringWithFormat:@"MbsOffice-modules-%@.zip",version];
-    NSDictionary *module = nil, *checksums = nil;
+    NSDictionary *module = nil, *signature = nil, *checksums = nil;
     for (id item in assets) {
         if (![item isKindOfClass:NSDictionary.class]) continue;
         if ([item[@"name"] isEqual:name]) {
             if (module) return nil;
             module = item;
+        }
+        if ([item[@"name"] isEqual:[name stringByAppendingString:@".sig"]]) {
+            if (signature) return nil;
+            signature = item;
         }
         if ([item[@"name"] isEqual:@"checksums.sha256"]) {
             if (checksums) return nil;
@@ -134,9 +148,16 @@ static NSDictionary *MbsUpdateCandidate(NSDictionary *release, NSString *current
         [module[@"size"] longLongValue] <= 0 || [module[@"size"] longLongValue] > 512LL*1024*1024) return nil;
     NSURL *url = MbsAssetURL(module[@"browser_download_url"],name);
     if (!url) return nil;
+    NSString *signatureName = [name stringByAppendingString:@".sig"];
+    NSURL *signatureURL = MbsAssetURL(signature[@"browser_download_url"],signatureName);
+    if (!signatureURL || ![signature[@"size"] isKindOfClass:NSNumber.class] ||
+        [signature[@"size"] longLongValue] <= 0 || [signature[@"size"] longLongValue] > 4096) return nil;
     id rawDigest = module[@"digest"];
     NSString *digest = MbsSha256Digest(rawDigest);
     if (rawDigest && rawDigest != NSNull.null && !digest) return nil;
+    id rawSignatureDigest = signature[@"digest"];
+    NSString *signatureDigest = MbsSha256Digest(rawSignatureDigest);
+    if (rawSignatureDigest && rawSignatureDigest != NSNull.null && !signatureDigest) return nil;
     NSURL *checksumURL = nil;
     NSString *checksumDigest = nil;
     if (!digest) {
@@ -149,7 +170,8 @@ static NSDictionary *MbsUpdateCandidate(NSDictionary *release, NSString *current
     }
     return @{@"version":version,@"name":name,@"url":url,@"size":module[@"size"],
              @"digest":digest ?: @"",@"checksumURL":checksumURL ?: NSNull.null,
-             @"checksumDigest":checksumDigest ?: @""};
+             @"checksumDigest":checksumDigest ?: @"",@"signatureURL":signatureURL,
+             @"signatureName":signatureName,@"signatureDigest":signatureDigest ?: @""};
 }
 
 static NSBundle *MbsOuterBundle(void)
@@ -175,8 +197,9 @@ static NSBundle *MbsOuterBundle(void)
 @property NSTimer *timer;
 @property NSString *currentVersion, *notifiedVersion, *expectedDigest;
 @property NSDictionary *candidate;
-@property NSURL *downloadedURL;
-@property BOOL checking, downloading, started, downloadHandled;
+@property NSURL *downloadedURL, *downloadedSignatureURL;
+@property NSTask *installerTask;
+@property BOOL checking, downloading, installing, started, downloadHandled;
 @end
 
 @implementation MbsUpdatesController
@@ -223,7 +246,7 @@ static NSBundle *MbsOuterBundle(void)
         frame:NSMakeRect(24,252,260,22)];
     self.latestLabel = [self label:@"最新版本：尚未检查" frame:NSMakeRect(294,252,262,22)];
     self.statusLabel = [self label:@"尚未检查更新。" frame:NSMakeRect(24,174,532,64)];
-    [self label:@"此处仅更新 Mbs 自研模块。当前支持下载与完整性校验，安装器尚未接入。"
+    [self label:@"此处仅更新 Mbs 自研模块。下载完成后，保存文档并退出应用即可自动安装并重启。"
         frame:NSMakeRect(24,71,532,40)].textColor = NSColor.secondaryLabelColor;
     self.progress = [[NSProgressIndicator alloc] initWithFrame:NSMakeRect(24,134,532,16)];
     self.progress.style = NSProgressIndicatorStyleBar;
@@ -239,8 +262,8 @@ static NSBundle *MbsOuterBundle(void)
 }
 - (void)refreshButtons
 {
-    self.checkButton.enabled = !self.checking && !self.downloading;
-    self.upgradeButton.enabled = self.candidate && !self.checking && !self.downloading;
+    self.checkButton.enabled = !self.checking && !self.downloading && !self.installing;
+    self.upgradeButton.enabled = self.candidate && !self.checking && !self.downloading && !self.installing;
     self.revealButton.hidden = !self.downloadedURL;
 }
 - (void)show
@@ -330,11 +353,43 @@ static NSBundle *MbsOuterBundle(void)
 - (void)downloadFailed:(NSString *)message
 {
     self.downloading = NO;
+    self.installing = NO;
     self.downloadTask = nil;
     self.statusLabel.stringValue = message;
     [self.progress stopAnimation:nil];
     self.progress.hidden = YES;
     [self refreshButtons];
+}
+- (void)startInstaller
+{
+    NSBundle *outer = MbsOuterBundle();
+    NSURL *installer = [outer.bundleURL URLByAppendingPathComponent:@"Contents/Resources/MbsModuleInstaller"];
+    if (!outer || !self.downloadedURL || !self.downloadedSignatureURL ||
+        ![NSFileManager.defaultManager isExecutableFileAtPath:installer.path]) {
+        [self downloadFailed:@"安装器不可用，更新文件已保留但未安装。请重新安装最新版 Mbs Office。"];
+        return;
+    }
+    NSTask *task = [NSTask new];
+    task.executableURL = installer;
+    task.arguments = @[@"--package", self.downloadedURL.path,
+                       @"--signature", self.downloadedSignatureURL.path,
+                       @"--app", outer.bundleURL.path,
+                       @"--wait-pid", [NSString stringWithFormat:@"%d", getpid()]];
+    task.standardOutput = [NSPipe pipe];
+    task.standardError = [NSPipe pipe];
+    @try {
+        [task launch];
+    } @catch (NSException *exception) {
+        [self downloadFailed:@"安装器启动失败，更新文件已保留但未安装。"];
+        return;
+    }
+    self.installerTask = task;
+    self.installing = YES;
+    self.statusLabel.stringValue = @"更新已校验。请保存文档并退出 Mbs Office，安装器会自动安装并重启。";
+    [self.progress stopAnimation:nil];
+    [self refreshButtons];
+    self.upgradeButton.title = @"等待重启";
+    self.upgradeButton.enabled = NO;
 }
 - (void)beginDownload:(NSString *)digest
 {
@@ -349,9 +404,10 @@ static NSBundle *MbsOuterBundle(void)
 - (void)upgrade:(id)sender
 {
     (void)sender;
-    if (!self.candidate || self.checking || self.downloading) return;
+    if (!self.candidate || self.checking || self.downloading || self.installing) return;
     self.downloading = YES;
     self.downloadedURL = nil;
+    self.downloadedSignatureURL = nil;
     self.progress.hidden = NO;
     [self refreshButtons];
     NSString *digest = self.candidate[@"digest"];
@@ -427,14 +483,29 @@ static NSBundle *MbsOuterBundle(void)
     dispatch_async(dispatch_get_main_queue(), ^{
         if (!valid) { [self downloadFailed:@"模块下载未通过完整性校验，请重新检查更新。"] ; return; }
         if (saveError || !saved || !destination) { [self downloadFailed:@"模块已校验，但无法保存下载文件。请检查可用空间后重试。"] ; return; }
-        self.downloading = NO;
-        self.downloadTask = nil;
         self.downloadedURL = destination;
         self.progress.doubleValue = 100;
-        self.statusLabel.stringValue = @"模块已下载并通过 SHA-256 校验，待安装器完成接入。当前应用版本未改变。";
-        [self refreshButtons];
-        self.upgradeButton.title = @"已下载";
-        self.upgradeButton.enabled = NO;
+        self.statusLabel.stringValue = @"模块已下载并通过 SHA-256 校验，正在校验安装签名…";
+        [self fetch:self.candidate[@"signatureURL"] completion:^(NSData *signatureData, NSInteger signatureStatus, NSError *signatureError) {
+            NSString *expected = self.candidate[@"signatureDigest"];
+            BOOL signatureOK = !signatureError && signatureStatus == 200 && MbsSignatureDataValid(signatureData) &&
+                (!expected.length || [MbsDataSha256(signatureData) isEqualToString:expected]);
+            if (!signatureOK) {
+                [self downloadFailed:@"更新签名无效，未进行安装。请稍后重试。"];
+                return;
+            }
+            NSURL *signatureURL = [destination URLByAppendingPathExtension:@"sig"];
+            NSError *signatureSaveError = nil;
+            BOOL signatureSaved = [signatureData writeToURL:signatureURL options:NSDataWritingAtomic error:&signatureSaveError];
+            if (!signatureSaved || signatureSaveError) {
+                [self downloadFailed:@"更新签名已校验，但无法保存安装文件。请检查可用空间后重试。"];
+                return;
+            }
+            self.downloadedSignatureURL = signatureURL;
+            self.downloading = NO;
+            self.downloadTask = nil;
+            [self startInstaller];
+        }];
     });
 }
 - (void)URLSession:(NSURLSession *)session task:(NSURLSessionTask *)task didCompleteWithError:(NSError *)error
