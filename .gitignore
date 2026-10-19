@@ -1,0 +1,6 @@
+build/
+dist/
+.DS_Store
+*.key
+*.p12
+*.mobileprovision
