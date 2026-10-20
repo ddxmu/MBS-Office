@@ -475,10 +475,12 @@ func mbsResult(_ state: String, _ message: String, extra: [String:Any] = [:], pe
             try mbsNoSymlinks(file)
             try data.write(to:file,options:.atomic)
         }
-        FileHandle.standardOutput.write(data + Data([10]))
+        // Older app versions launch us with pipes that close when they quit.
+        // The persisted receipt remains authoritative if a reader disappears.
+        try? FileHandle.standardOutput.write(contentsOf:data + Data([10]))
     } catch {
         // Never print package contents, signatures, keys, or subprocess output.
-        FileHandle.standardError.write(Data("无法保存更新状态。\n".utf8))
+        try? FileHandle.standardError.write(contentsOf:Data("无法保存更新状态。\n".utf8))
     }
 }
 
@@ -633,6 +635,7 @@ func mbsInstall(_ arguments: MbsInstallerArguments) throws {
 @main
 enum MbsModuleInstallerMain {
     static func main() {
+        signal(SIGPIPE,SIG_IGN)
         let verify = CommandLine.arguments.contains("--verify-only")
         do {
             let arguments = try MbsInstallerArguments(Array(CommandLine.arguments.dropFirst()))

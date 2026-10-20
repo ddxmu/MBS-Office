@@ -403,8 +403,10 @@ static NSURL *MbsInstallerURL(NSBundle *outer)
                        @"--signature", self.downloadedSignatureURL.path,
                        @"--app", outer.bundleURL.path,
                        @"--wait-pid", [NSString stringWithFormat:@"%d", getpid()]];
-    task.standardOutput = [NSPipe pipe];
-    task.standardError = [NSPipe pipe];
+    // The installer must survive this application's normal exit. Its durable
+    // status is in Updates/status.json, not in a pipe owned by this process.
+    task.standardOutput = [NSFileHandle fileHandleWithNullDevice];
+    task.standardError = [NSFileHandle fileHandleWithNullDevice];
     @try {
         [task launch];
     } @catch (NSException *exception) {
