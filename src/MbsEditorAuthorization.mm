@@ -10,7 +10,15 @@
 #import "MbsEditorAuthorization.h"
 #import "MbsEditorLicenseKey.h"
 
+static unsigned MbsLegacyKeychainDenialCount(void) {
+    auto count = (unsigned (*)())dlsym(RTLD_DEFAULT,"MbsLegacyKeychainDeniedCount");
+    return count ? count() : 0;
+}
 static int64_t MbsGrantExpiry;
+static unsigned MbsStartupRouteCount(void) {
+    auto count = (unsigned (*)())dlsym(RTLD_DEFAULT,"MbsLegacyStartupPromptCount");
+    return count ? count() : 0;
+}
 static double MbsGetGrantExpiry(void) { return __atomic_load_n(&MbsGrantExpiry,__ATOMIC_ACQUIRE); }
 static void MbsSetGrantExpiry(double value) { __atomic_store_n(&MbsGrantExpiry,(int64_t)value,__ATOMIC_RELEASE); }
 static NSString *MbsGrantHash(NSData *data) {
@@ -57,6 +65,15 @@ NSDictionary *MbsVerifyEditorGrant(NSData *response, NSData *publicKey,
     double issued = [claims[@"issuedAt"] doubleValue], expires = [claims[@"expiresAt"] doubleValue];
     if (!isfinite(issued) || !isfinite(expires) || issued > now+300 || expires <= now ||
         expires <= issued || expires-issued > 30*24*60*60) return nil;
+    id activation = claims[@"activation"];
+    if (activation && (![activation isKindOfClass:NSDictionary.class] ||
+        !MbsGrantNumber(activation[@"id"]) || [activation[@"id"] longLongValue] <= 0 ||
+        ![@[@"standard",@"vip"] containsObject:activation[@"plan"] ?: @""] ||
+        ![activation[@"deviceId"] isEqual:device] ||
+        !MbsGrantNumber(activation[@"expiresAt"]) || !isfinite([activation[@"expiresAt"] doubleValue]) ||
+        [activation[@"expiresAt"] doubleValue] < expires ||
+        !MbsGrantNumber(activation[@"maxDevices"]) || [activation[@"maxDevices"] intValue] < 1 ||
+        [activation[@"maxDevices"] intValue] > 10)) return nil;
     return claims;
 }
 
@@ -143,12 +160,14 @@ static NSArray *MbsNativeAuthorizationStates(void) {
 
 @interface MbsEditorAuthorization : NSObject <NSURLSessionTaskDelegate>
 @property NSString *token, *email, *device, *status;
+@property NSDictionary *activation;
 @property NSURLSession *session;
 @property NSURLSessionDataTask *task;
 @property NSTimer *timer;
 @property NSUInteger generation;
 + (instancetype)shared;
 - (void)request;
+- (void)requestWithActivationCode:(NSString *)code;
 @end
 @implementation MbsEditorAuthorization
 + (instancetype)shared {
@@ -161,8 +180,10 @@ static NSArray *MbsNativeAuthorizationStates(void) {
     NSArray *native = verified ? MbsNativeAuthorizationStates() : @[];
     BOOL accepted = native.count == 3;
     for (NSDictionary *state in native) accepted = accepted && [state[@"accepted"] boolValue] && [state[@"level"] intValue] >= 2;
-    if (accepted) self.status = @"Mbs 授权已生效";
     NSDictionary *receipt = @{@"verified":@(verified),@"nativeAccepted":@(accepted),@"nativeManagers":native,
+        @"activation":verified && self.activation ? self.activation : (id)NSNull.null,
+        @"legacyKeychainReadsDeclined":@(MbsLegacyKeychainDenialCount()),
+        @"busy":@(self.task != nil),@"startupRoutes":@(MbsStartupRouteCount()),
         @"status":self.status ?: @"未连接",@"authority":@"mbs-custom",@"originalVendorLicense":@NO,
         @"pid":@(getpid()),@"executable":NSBundle.mainBundle.executablePath ?: @"",
         @"expiresAt":@(MbsGetGrantExpiry()),@"recordedAt":@(NSDate.date.timeIntervalSince1970)};
@@ -170,6 +191,9 @@ static NSArray *MbsNativeAuthorizationStates(void) {
     [[NSNotificationCenter defaultCenter] postNotificationName:@"MbsEditorAuthorizationDidChange" object:nil userInfo:receipt];
 }
 - (void)request {
+    [self requestWithActivationCode:nil];
+}
+- (void)requestWithActivationCode:(NSString *)activationCode {
     if (self.task || !self.token.length || !self.device.length) return;
     unsigned char bytes[32];
     if (SecRandomCopyBytes(kSecRandomDefault,sizeof(bytes),bytes) != errSecSuccess) return;
@@ -179,10 +203,14 @@ static NSArray *MbsNativeAuthorizationStates(void) {
     NSString *email = self.email, *device = self.device;
     NSString *sessionHash = MbsGrantHash([self.token dataUsingEncoding:NSUTF8StringEncoding]);
     NSUInteger generation = self.generation;
-    self.status = @"正在验证 Mbs 授权…"; [self notify];
-    NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:[NSURL URLWithString:@"https://ttys.ddxmu.com/api/mbs/editor/license"]];
+    self.status = activationCode ? @"正在兑换授权码…" : @"正在验证 Mbs 授权…"; [self notify];
+    NSString *route = activationCode ? @"activation/redeem" : @"editor/license";
+    NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:[NSURL URLWithString:
+        [@"https://ttys.ddxmu.com/api/mbs/" stringByAppendingString:route]]];
     request.HTTPMethod = @"POST";
-    request.HTTPBody = [NSJSONSerialization dataWithJSONObject:@{@"deviceId":device,@"nonce":nonce} options:0 error:nil];
+    NSMutableDictionary *fields = [@{@"deviceId":device,@"nonce":nonce} mutableCopy];
+    if (activationCode) fields[@"code"] = activationCode;
+    request.HTTPBody = [NSJSONSerialization dataWithJSONObject:fields options:0 error:nil];
     [request setValue:@"application/json" forHTTPHeaderField:@"Content-Type"];
     [request setValue:[@"Bearer " stringByAppendingString:self.token] forHTTPHeaderField:@"Authorization"];
     NSURLSessionConfiguration *configuration = NSURLSessionConfiguration.ephemeralSessionConfiguration;
@@ -193,20 +221,29 @@ static NSArray *MbsNativeAuthorizationStates(void) {
         NSInteger code = [response isKindOfClass:NSHTTPURLResponse.class] ? [(NSHTTPURLResponse *)response statusCode] : 0;
         BOOL correctURL = [response.URL.absoluteString isEqual:request.URL.absoluteString];
         NSDictionary *claims = !error && code == 200 && correctURL ? MbsVerifyEditorGrant(data,MbsPinnedGrantKey(),nonce,email,device,sessionHash,NSDate.date.timeIntervalSince1970) : nil;
-        if (claims) {
+        if (claims && MbsWriteGrantFile("editor-license.json",data)) {
             MbsSetGrantExpiry([claims[@"expiresAt"] doubleValue]);
-            MbsWriteGrantFile("editor-license.json",data);
-            self.status = @"Mbs 授权已验证";
+            self.activation = claims[@"activation"];
+            self.status = self.activation ? @"授权码已激活" : @"Mbs 授权已验证";
+        } else if (claims) {
+            claims = nil;
+            self.status = @"授权未保存，请检查本机存储后重试";
         } else if (code == 401) {
             MbsSetGrantExpiry(0);
+            self.activation = nil;
             int dir = MbsGrantDirectory(); if (dir >= 0) { unlinkat(dir,"editor-license.json",0); close(dir); }
             self.status = @"登录已失效";
+        } else if (activationCode) {
+            id failure = data.length <= 16384 ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
+            NSString *message = [failure isKindOfClass:NSDictionary.class] && MbsGrantString(failure[@"error"]) ? failure[@"error"] : nil;
+            self.status = message.length && message.length < 160 ? message : @"兑换失败，请检查网络后重试";
         } else self.status = MbsHasVerifiedEditorLicense() ? @"授权有效，暂时无法续期" : @"Mbs 授权未通过，请检查网络";
         self.task = nil; [self.session finishTasksAndInvalidate]; self.session = nil; [self notify];
         if (claims) dispatch_after(dispatch_time(DISPATCH_TIME_NOW,3*NSEC_PER_SEC),dispatch_get_main_queue(),^{
             if (generation == self.generation && MbsHasVerifiedEditorLicense()) [self notify];
         });
     }];
+    [self notify];
     [self.task resume];
 }
 - (void)URLSession:(NSURLSession *)session task:(NSURLSessionTask *)task
@@ -229,6 +266,7 @@ void MbsRequestEditorLicense(const char *token, const char *email) {
         if (![value.token isEqual:copiedToken] || ![value.email isEqual:copiedEmail]) {
             value.generation++; [value.task cancel]; [value.session invalidateAndCancel]; value.task = nil;
             MbsSetGrantExpiry(0);
+            value.activation = nil;
         }
         value.token = copiedToken; value.email = copiedEmail; value.device = MbsGrantDevice();
         [value.timer invalidate];
@@ -238,13 +276,27 @@ void MbsRequestEditorLicense(const char *token, const char *email) {
     };
     if (NSThread.isMainThread) start(); else dispatch_async(dispatch_get_main_queue(),start);
 }
+void MbsRedeemActivationCode(const char *code) {
+    NSString *copied = code ? [NSString stringWithUTF8String:code] : nil;
+    copied = [[copied stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet] uppercaseString];
+    dispatch_async(dispatch_get_main_queue(),^{
+        MbsEditorAuthorization *value = MbsEditorAuthorization.shared;
+        if (!value.token.length || !value.email.length) return;
+        if (!copied.length || copied.length > 64) {
+            value.status = @"请输入有效授权码"; [value notify]; return;
+        }
+        value.generation++; [value.task cancel]; [value.session invalidateAndCancel];
+        value.task = nil; value.session = nil;
+        [value requestWithActivationCode:copied];
+    });
+}
 void MbsResetEditorLicense(void) {
     MbsSetGrantExpiry(0);
     void (^reset)(void) = ^{
         MbsEditorAuthorization *value = MbsEditorAuthorization.shared;
         value.generation++; [value.task cancel]; [value.session invalidateAndCancel]; [value.timer invalidate];
         value.timer = nil; value.task = nil; value.session = nil; value.token = nil; value.email = nil;
-        MbsSetGrantExpiry(0); value.status = @"未连接";
+        MbsSetGrantExpiry(0); value.activation = nil; value.status = @"未连接";
         int dir = MbsGrantDirectory(); if (dir >= 0) { unlinkat(dir,"editor-license.json",0); close(dir); }
         [value notify];
     };
@@ -254,7 +306,10 @@ char *MbsCopyEditorAuthorizationState(void) {
     __block NSData *data;
     void (^read)(void) = ^{
         data = [NSJSONSerialization dataWithJSONObject:@{@"authority":@"mbs-custom",@"verified":@(MbsHasVerifiedEditorLicense()),
-            @"expiresAt":@(MbsGetGrantExpiry()),@"status":MbsEditorAuthorization.shared.status ?: @"未连接",@"originalVendorLicense":@NO} options:0 error:nil];
+            @"expiresAt":@(MbsGetGrantExpiry()),@"status":MbsEditorAuthorization.shared.status ?: @"未连接",
+            @"activation":MbsHasVerifiedEditorLicense() && MbsEditorAuthorization.shared.activation ? MbsEditorAuthorization.shared.activation : (id)NSNull.null,
+            @"busy":@(MbsEditorAuthorization.shared.task != nil),
+            @"originalVendorLicense":@NO} options:0 error:nil];
     };
     if (NSThread.isMainThread) read(); else dispatch_sync(dispatch_get_main_queue(),read);
     return data ? strndup((const char *)data.bytes,data.length) : NULL;
@@ -276,6 +331,7 @@ __attribute__((constructor)) static void MbsRestoreEditorGrant(void) { @autorele
         MbsSetGrantExpiry([claims[@"expiresAt"] doubleValue]);
         MbsEditorAuthorization *value = MbsEditorAuthorization.shared;
         value.token = session[@"token"]; value.email = session[@"email"]; value.device = claims[@"deviceId"];
+        value.activation = claims[@"activation"];
         value.status = @"Mbs 授权已验证";
     }
 } }

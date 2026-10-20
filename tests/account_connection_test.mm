@@ -6,6 +6,7 @@ static NSString *MbsTestHomeDirectory(void) { return @(getenv("MBS_TEST_HOME"));
 #undef NSHomeDirectory
 
 static BOOL cachedGrant, offline;
+static BOOL appActive = YES;
 static NSInteger responseCode = 200, grantRequests;
 static NSString *testEmail = @"ui-check@example.invalid";
 static NSString *testToken = @"synthetic-test-session-token-000000000000";
@@ -14,6 +15,7 @@ bool MbsCanRestoreAccountSession(const char *token, const char *email) {
     return cachedGrant && token && email && [@(token) isEqual:testToken] && [@(email) isEqual:testEmail];
 }
 void MbsRequestEditorLicense(const char *token, const char *email) { ++grantRequests; }
+void MbsRedeemActivationCode(const char *code) {}
 void MbsResetEditorLicense(void) { cachedGrant = NO; }
 char *MbsCopyEditorAuthorizationState(void) { return strdup("{}"); }
 
@@ -44,6 +46,8 @@ int main(int argc, const char **argv) { @autoreleasepool {
     assert(argc == 2 && getenv("MBS_TEST_HOME"));
     [NSApplication sharedApplication];
     [NSApp setActivationPolicy:NSApplicationActivationPolicyAccessory];
+    method_setImplementation(class_getInstanceMethod(NSApplication.class,@selector(isActive)),
+        imp_implementationWithBlock(^BOOL(id receiver) { return appActive; }));
     Method method = class_getClassMethod(NSURLSessionConfiguration.class,@selector(ephemeralSessionConfiguration));
     IMP original = method_getImplementation(method);
     method_setImplementation(method,imp_implementationWithBlock(^NSURLSessionConfiguration *(id receiver) {
@@ -53,22 +57,51 @@ int main(int argc, const char **argv) { @autoreleasepool {
     }));
     NSString *mode = @(argv[1]);
     MbsLocalAccountController *c = MbsLocalAccountController.shared;
-    if ([mode isEqual:@"login"]) {
+    if ([mode isEqual:@"login"] || [mode isEqual:@"signed-in-click"] || [mode isEqual:@"background-refresh"] || [mode isEqual:@"signed-in-login-form"]) {
         [c show]; c.email.stringValue = testEmail; c.password.stringValue = @"synthetic-password";
         [c submit:nil]; pump(^BOOL{ return !c.session; });
         assert([c.sessionEmail isEqual:testEmail] && !c.window.isVisible && !c.password.stringValue.length);
         assert(MbsLoadSession()[@"token"] && !MbsLoadSession()[@"password"]);
         assert(c.statusPanel.isVisible);
+        if ([mode isEqual:@"signed-in-login-form"]) {
+            [c showLoginForm];
+            assert(c.window.isVisible && !c.accountPanel.isVisible && !c.statusPanel.isVisible);
+            assert([c.email.stringValue isEqual:testEmail] && !c.password.stringValue.length && c.mode.selectedSegment == 0);
+            [c deferLogin:nil];
+            assert(!c.window.isVisible && [c.sessionEmail isEqual:testEmail]);
+            puts("PASS signed-in-login-form"); return 0;
+        }
+        if ([mode isEqual:@"signed-in-click"] || [mode isEqual:@"background-refresh"]) {
+            NSWindow *host = [[NSWindow alloc] initWithContentRect:NSMakeRect(0,0,900,600)
+                styleMask:NSWindowStyleMaskTitled backing:NSBackingStoreBuffered defer:NO];
+            [host makeKeyAndOrderFront:nil];
+            [c show];
+            assert(c.accountPanel.isVisible && !c.window.isVisible && !c.statusPanel.isVisible);
+            assert([c.accountPanelEmail.stringValue isEqual:testEmail]);
+            if ([mode isEqual:@"background-refresh"]) {
+                appActive=NO;
+                [NSNotificationCenter.defaultCenter postNotificationName:NSApplicationDidResignActiveNotification object:NSApp];
+                [c showStatusPanel]; [c showAccountPopoverForWindow:host point:NSMakePoint(800,500)];
+                assert(!c.accountPanel.isVisible && !c.statusPanel.isVisible);
+                assert(c.window.level==NSNormalWindowLevel && c.accountPanel.level==NSNormalWindowLevel);
+            }
+            printf("PASS %s\n",argv[1]); return 0;
+        }
         pump(^BOOL{ return !c.statusPanel.isVisible; });
     } else {
         MbsSaveSession(testEmail,testToken);
         offline = YES; cachedGrant = ![mode isEqual:@"no-cache"];
-        if ([mode isEqual:@"expired-session"] || [mode isEqual:@"revoked-session"]) {
+        if ([mode isEqual:@"background-expiry"]) appActive=NO;
+        if ([mode isEqual:@"expired-session"] || [mode isEqual:@"revoked-session"] || [mode isEqual:@"background-expiry"]) {
             offline = NO; responseCode = [mode isEqual:@"revoked-session"] ? 403 : 401;
         }
         [c startSession];
         assert(!c.window.isVisible);
         pump(^BOOL{ return !c.restoringSession; });
+        if ([mode isEqual:@"background-expiry"]) {
+            assert(!c.window.isVisible && !MbsLoadSession());
+            puts("PASS background-expiry"); return 0;
+        }
         assert(c.window.isVisible && !c.sessionEmail.length);
         if ([mode isEqual:@"expired-session"] || [mode isEqual:@"revoked-session"]) {
             assert(!MbsLoadSession() && !c.deferredSession && c.retry.hidden && !cachedGrant);

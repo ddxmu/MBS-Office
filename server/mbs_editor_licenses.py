@@ -73,7 +73,7 @@ class EditorLicenseIssuer:
         self.public_key_base64 = base64.b64encode(public).decode("ascii")
         self.key_id = "mbs-editor-p256-" + hashlib.sha256(public).hexdigest()[:16]
 
-    def issue(self, user, session_hash, session_expires_at, device_id, nonce, now=None):
+    def issue(self, user, session_hash, session_expires_at, device_id, nonce, now=None, activation=None):
         validate_request(device_id, nonce)
         now = int(time.time() if now is None else now)
         expires = min(now + MAX_TTL, int(session_expires_at))
@@ -85,6 +85,8 @@ class EditorLicenseIssuer:
             "authority": AUTHORITY, "userId": int(user["id"]), "email": user["email"],
             "deviceId": device_id, "nonce": nonce, "issuedAt": now, "expiresAt": expires,
             "jti": secrets.token_urlsafe(24), "sessionHash": session_hash}
+        if activation is not None:
+            claims["activation"] = activation
         payload = json.dumps(claims, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
         signature = self.key.sign(payload, ec.ECDSA(hashes.SHA256()))
         return {"payload": base64.b64encode(payload).decode("ascii"),

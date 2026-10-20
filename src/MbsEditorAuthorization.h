@@ -6,6 +6,7 @@ bool MbsHasVerifiedEditorLicense(void);
 // Checks only the signed Mbs account grant, never editor/vendor entitlements.
 bool MbsCanRestoreAccountSession(const char *token, const char *email);
 void MbsRequestEditorLicense(const char *token, const char *email);
+void MbsRedeemActivationCode(const char *code);
 void MbsResetEditorLicense(void);
 char *MbsCopyEditorAuthorizationState(void);
 #ifdef __cplusplus

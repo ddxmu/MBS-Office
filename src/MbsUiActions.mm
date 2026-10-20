@@ -3,6 +3,7 @@
 #import "MbsLocalAccount.h"
 #import "MbsUpdates.h"
 #import "MbsNativeLoginRecovery.h"
+#import "MbsLoginHitTarget.h"
 #include <string.h>
 
 namespace kso_qt {
@@ -59,13 +60,6 @@ static kso_qt::QString literal(NSString *value) {
         return kso_qt::QString(cache[value].pointerValue);
     }
 }
-static NSString *MbsAccountInitialForEmail(NSString *email) {
-    NSString *local = [[email componentsSeparatedByString:@"@"] firstObject];
-    if (!local.length) local = email;
-    if (!local.length) return @"";
-    NSRange first = [local rangeOfComposedCharacterSequenceAtIndex:0];
-    return [[local substringWithRange:first] uppercaseString];
-}
 static BOOL isRemovedAssistantText(NSString *text) {
     return [text containsString:@"灵犀"] || [text containsString:@"超级派"];
 }
@@ -121,98 +115,6 @@ static void InstallMbsWorkspaceURLHook(void) {
         }
     });
 }
-static BOOL MbsAccountSignedIn = NO;
-static NSPanel *MbsAccountBadgePanel;
-static NSTextField *MbsAccountBadgeLabel;
-static id MbsNativeAccessibilityValue(id item,NSString *attribute);
-static NSRect MbsAccountControlFrame(NSWindow *window) {
-    NSMutableArray *pending = [NSMutableArray arrayWithObject:window];
-    for (NSUInteger inspected=0;pending.count && inspected<256;++inspected) {
-        id<NSAccessibility> item = pending.lastObject;
-        [pending removeLastObject];
-        NSString *role = [item respondsToSelector:@selector(accessibilityRole)] ? item.accessibilityRole : nil;
-        NSString *title = [item respondsToSelector:@selector(accessibilityTitle)] ? item.accessibilityTitle : nil;
-        NSString *label = [item respondsToSelector:@selector(accessibilityLabel)] ? item.accessibilityLabel : nil;
-        if ([role isEqualToString:NSAccessibilityButtonRole] &&
-            ([title isEqualToString:@"立即登录"] || [label isEqualToString:@"立即登录"]) &&
-            [item respondsToSelector:@selector(accessibilityFrame)]) {
-            NSRect frame = item.accessibilityFrame;
-            if (frame.size.width >= 20 && frame.size.width < 200 &&
-                frame.size.height >= 12 && frame.size.height < 60) return frame;
-        }
-        NSArray *children = [item respondsToSelector:@selector(accessibilityChildren)] ? item.accessibilityChildren : nil;
-        if (!children.count) children = MbsNativeAccessibilityValue(item,NSAccessibilityChildrenAttribute);
-        if ([children isKindOfClass:NSArray.class]) [pending addObjectsFromArray:children];
-    }
-    // The document title bar is not exposed through the editor's AX tree.
-    // Its account control has a fixed trailing inset in this bundled layout.
-    NSString *title = window.title ?: @"";
-    if ([title.pathExtension.lowercaseString length] || [title hasPrefix:@"文字文稿"] ||
-        [title hasPrefix:@"工作簿"] || [title hasPrefix:@"演示文稿"]) {
-        NSRect bounds = window.contentView.bounds;
-        return [window convertRectToScreen:NSMakeRect(NSMaxX(bounds)-92,NSMaxY(bounds)-33,68,22)];
-    }
-    return NSZeroRect;
-}
-static void MbsRefreshAccountBadge(void) {
-    if (!MbsAccountSignedIn) {
-        [MbsAccountBadgePanel orderOut:nil];
-        return;
-    }
-    NSWindow *main = nil;
-    for (NSWindow *candidate in NSApp.windows) {
-        if (candidate != MbsAccountBadgePanel && candidate.isVisible &&
-            candidate.frame.size.width > 600 && candidate.frame.size.height > 300) {
-            main = candidate;
-            break;
-        }
-    }
-    if (!main) return;
-    NSRect target = MbsAccountControlFrame(main);
-    if (NSIsEmptyRect(target)) { [MbsAccountBadgePanel orderOut:nil]; return; }
-    if (!MbsAccountBadgePanel) {
-        MbsAccountBadgePanel = [[NSPanel alloc] initWithContentRect:NSMakeRect(0, 0, 42, 42)
-                                                            styleMask:NSWindowStyleMaskBorderless | NSWindowStyleMaskNonactivatingPanel
-                                                              backing:NSBackingStoreBuffered
-                                                                defer:NO];
-        MbsAccountBadgePanel.releasedWhenClosed = NO;
-        MbsAccountBadgePanel.level = NSNormalWindowLevel;
-        MbsAccountBadgePanel.opaque = NO;
-        MbsAccountBadgePanel.backgroundColor = NSColor.windowBackgroundColor;
-        MbsAccountBadgePanel.ignoresMouseEvents = YES;
-        MbsAccountBadgePanel.collectionBehavior = NSWindowCollectionBehaviorFullScreenAuxiliary;
-        MbsAccountBadgeLabel = [NSTextField labelWithString:@""];
-        MbsAccountBadgeLabel.alignment = NSTextAlignmentCenter;
-        MbsAccountBadgeLabel.font = [NSFont systemFontOfSize:16.0 weight:NSFontWeightSemibold];
-        MbsAccountBadgeLabel.textColor = NSColor.whiteColor;
-        MbsAccountBadgeLabel.frame = NSMakeRect(0, 0, 42, 42);
-        MbsAccountBadgeLabel.wantsLayer = YES;
-        MbsAccountBadgeLabel.layer.backgroundColor = [NSColor colorWithCalibratedRed:0.12 green:0.39 blue:0.86 alpha:1.0].CGColor;
-        MbsAccountBadgeLabel.layer.cornerRadius = 21.0;
-        [MbsAccountBadgePanel.contentView addSubview:MbsAccountBadgeLabel];
-    }
-    const char *email = MbsCurrentAccountEmail();
-    NSString *initial = email ? MbsAccountInitialForEmail([NSString stringWithUTF8String:email]) : @"";
-    MbsAccountBadgeLabel.stringValue = initial;
-    free((void *)email);
-    CGFloat diameter = MIN(18.0,target.size.height);
-    MbsAccountBadgeLabel.frame = NSMakeRect(0,(target.size.height-diameter)/2,diameter,diameter);
-    MbsAccountBadgeLabel.layer.cornerRadius = diameter/2;
-    [MbsAccountBadgePanel setFrame:target display:NO];
-    if (MbsAccountBadgePanel.parentWindow != main) {
-        [MbsAccountBadgePanel.parentWindow removeChildWindow:MbsAccountBadgePanel];
-        [main addChildWindow:MbsAccountBadgePanel ordered:NSWindowAbove];
-    }
-    [MbsAccountBadgePanel orderFrontRegardless];
-}
-static void MbsRefreshAccountHeader(NSNumber *signedIn) {
-    const char *email = MbsCurrentAccountEmail();
-    MbsAccountSignedIn = signedIn ? signedIn.boolValue : (email != NULL);
-    // Native header widgets are owned by their windows. Never retain raw Qt
-    // pointers across account notifications or document-window destruction.
-    free((void *)email);
-    MbsRefreshAccountBadge();
-}
 static void labelText(kso_qt::QLabel*label,const kso_qt::QString&text) {
     NSString *value=read(text),*replacement=updated(value);
     if(![value isEqualToString:replacement])label->setText(literal(replacement));else label->setText(text);
@@ -241,6 +143,9 @@ static bool routeClick(kso_qt::QObject*receiver,kso_qt::QEvent*event) {
             kso_qt::QObject*object=receiver;
             for(int depth=0;object&&depth<7;++depth) {
                 NSString *name=className(object),*text=property(object,"text");
+                if (depth == 0 && [text isEqualToString:@"立即登录"]) {
+                    MbsShowLoginForm(); return true;
+                }
                 if (isRemovedAssistantText(text)) return true;
                 if (isUpgradeText(text)) {
                     MbsShowUpdates();return true;
@@ -261,7 +166,7 @@ static void buttonMouseRelease(kso_qt::QAbstractButton *button,kso_qt::QMouseEve
         return;
     }
     if ([text containsString:@"立即登录"] || [text isEqualToString:@"登录"]) {
-        MbsShowLocalAccount();
+        MbsShowLoginForm();
         return;
     }
     buttonMouseReleaseOriginal(button,event);
@@ -273,7 +178,7 @@ static bool maybeShowLocalAccount(void *button) {
         MbsShowUpdates(); return true;
     }
     if ([text containsString:@"立即登录"] || [text isEqualToString:@"登录"]) {
-        MbsShowLocalAccount(); return true;
+        MbsShowLoginForm(); return true;
     }
     return false;
 }
@@ -293,7 +198,7 @@ static void MbsShowAccountForUserClick(void) {
     NSEvent *event = NSApp.currentEvent;
     if ((event.type == NSEventTypeLeftMouseDown || event.type == NSEventTypeLeftMouseUp ||
          event.type == NSEventTypeKeyDown) &&
-        NSProcessInfo.processInfo.systemUptime - event.timestamp < 1.0) MbsShowLocalAccount();
+        NSProcessInfo.processInfo.systemUptime - event.timestamp < 1.0) MbsShowLoginForm();
 }
 static void unloginedButtonClick(void *self) {
     MbsShowAccountForUserClick();
@@ -346,72 +251,31 @@ __attribute__((used,section("__DATA,__interpose"))) static const Interpose actio
     {(const void*)&routeClick,(const void*)&kso_qt::QCoreApplication::notifyInternal2}
 };
 static id MbsLoginMouseMonitor;
-static void MbsUseNativeOfflineAction(NSWindow *window) {
-    if (!NSThread.isMainThread || !window.isVisible || ![window.title isEqualToString:@"账号登录"]) return;
-    static BOOL handling = NO;
-    if (handling) return;
-    handling = YES;
-    id later = MbsFailedNativeLoginAction(window);
-    if ([later respondsToSelector:@selector(accessibilityPerformAction:)])
-        [later accessibilityPerformAction:NSAccessibilityPressAction];
-    else if ([later respondsToSelector:@selector(accessibilityPerformPress)])
-        [later accessibilityPerformPress];
-    handling = NO;
-}
-static void InstallMbsOfflineActionObserver(void) {
-    for (NSNotificationName name in @[NSWindowDidBecomeKeyNotification,NSWindowDidUpdateNotification]) {
-        [[NSNotificationCenter defaultCenter] addObserverForName:name object:nil queue:nil
-                                                      usingBlock:^(NSNotification *note) {
-            MbsUseNativeOfflineAction(note.object);
-        }];
-    }
-    // The editor can enter its login loop before applicationDidFinishLaunching,
-    // so a dispatch-to-main observer alone starts too late.
-    CFRunLoopTimerRef timer = CFRunLoopTimerCreateWithHandler(kCFAllocatorDefault,
-        CFAbsoluteTimeGetCurrent()+0.5,0.5,0,0,^(CFRunLoopTimerRef) {
-            for (NSWindow *window in NSApp.windows) MbsUseNativeOfflineAction(window);
-        });
-    CFRunLoopAddTimer(CFRunLoopGetMain(),timer,kCFRunLoopCommonModes);
-    CFRelease(timer);
-}
+static __weak NSWindow *MbsLoginPressedWindow;
+static NSRect MbsLoginPressedFrame;
 static void InstallMbsLoginMouseMonitor(void) {
     dispatch_async(dispatch_get_main_queue(), ^{
         if (MbsLoginMouseMonitor) return;
-        [[NSNotificationCenter defaultCenter] addObserverForName:@"MbsLocalAccountDidChange"
-                                                            object:nil
-                                                             queue:[NSOperationQueue mainQueue]
-                                                        usingBlock:^(NSNotification *note) {
-            MbsRefreshAccountHeader(note.userInfo[@"signedIn"]);
-        }];
-        [[NSNotificationCenter defaultCenter] addObserverForName:NSWindowDidBecomeKeyNotification
-                                                            object:nil
-                                                             queue:[NSOperationQueue mainQueue]
-                                                        usingBlock:^(NSNotification *note) {
-            NSWindow *window = note.object;
-            if (window) {
-                window.acceptsMouseMovedEvents = YES;
-            }
-        }];
-        for (NSWindow *window in NSApp.windows) window.acceptsMouseMovedEvents = YES;
-        MbsLoginMouseMonitor = [NSEvent addLocalMonitorForEventsMatchingMask:(NSEventMaskLeftMouseUp | NSEventMaskMouseMoved) handler:^NSEvent *(NSEvent *event) {
+        MbsLoginMouseMonitor = [NSEvent addLocalMonitorForEventsMatchingMask:(NSEventMaskLeftMouseDown | NSEventMaskLeftMouseUp) handler:^NSEvent *(NSEvent *event) {
             NSWindow *window=event.window;
             NSPoint point=event.locationInWindow;
-            BOOL isMbsAiWindow = [window.title isEqualToString:@"AI 设置"] ||
-                                 [window.title isEqualToString:@"AI"];
-            if (event.type == NSEventTypeMouseMoved) {
-                MbsRefreshAccountBadge();
-                // Keep the hover target deliberately small: only the top-right
-                // account control can open the account card.
-                NSPoint screenPoint = [window convertPointToScreen:point];
-                BOOL accountHoverHit = !isMbsAiWindow && MbsAccountSignedIn &&
-                    MbsAccountBadgePanel.isVisible && MbsAccountBadgePanel.parentWindow == window &&
-                    NSPointInRect(screenPoint,MbsAccountBadgePanel.frame);
-                if (accountHoverHit) {
-                    MbsAccountHoverAtWindow((__bridge void *)window, point.x, point.y);
-                } else {
-                    MbsHideAccountPopover();
+            if (event.type == NSEventTypeLeftMouseDown) {
+                MbsLoginPressedWindow = nil;
+                if ([window.title isEqualToString:@"首页"]) {
+                    NSPoint screen = [window convertPointToScreen:point];
+                    for (NSValue *value in MbsLoginButtonFrames(window,window.frame)) {
+                        if (NSPointInRect(screen,value.rectValue)) {
+                            MbsLoginPressedWindow = window; MbsLoginPressedFrame = value.rectValue;
+                            return nil;
+                        }
+                    }
                 }
-                return event;
+            } else if (event.type == NSEventTypeLeftMouseUp && MbsLoginPressedWindow) {
+                BOOL hit = window == MbsLoginPressedWindow &&
+                    NSPointInRect([window convertPointToScreen:point],MbsLoginPressedFrame);
+                MbsLoginPressedWindow = nil;
+                if (hit) MbsShowLoginForm();
+                return nil;
             }
             return event;
         }];
@@ -419,7 +283,6 @@ static void InstallMbsLoginMouseMonitor(void) {
 }
 __attribute__((constructor)) static void startChecks() {
     InstallMbsWorkspaceURLHook();
-    InstallMbsOfflineActionObserver();
     [[NSNotificationCenter defaultCenter] addObserverForName:NSApplicationDidFinishLaunchingNotification object:nil queue:nil usingBlock:^(NSNotification*){MbsStartUpdateChecks();MbsStartAccountSession();}];
     InstallMbsLoginMouseMonitor();
 }

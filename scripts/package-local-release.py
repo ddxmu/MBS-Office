@@ -12,6 +12,7 @@ import zipfile
 p = argparse.ArgumentParser(description=__doc__)
 p.add_argument('--app', type=Path, required=True)
 p.add_argument('--work', type=Path, required=True)
+p.add_argument('--from-version', required=True)
 args = p.parse_args()
 repo = Path(__file__).resolve().parent.parent
 version = (repo/'VERSION').read_text().strip()
@@ -19,7 +20,7 @@ assert not args.work.exists(), 'Use a new release work directory'
 args.work.mkdir()
 source = args.app.resolve()
 outer = plistlib.loads((source/'Contents/Info.plist').read_bytes())
-assert outer['CFBundleShortVersionString'] == '0.1.18', 'This package supports the verified 0.1.18 baseline only'
+assert outer['CFBundleShortVersionString'] == args.from_version, 'Installed app does not match the requested baseline'
 stage = args.work/'dmg-root'
 stage.mkdir()
 app = stage/'Mbs Office.app'
@@ -44,9 +45,9 @@ subprocess.run(['codesign','--verify','--deep','--strict',str(app)],check=True)
 assets = args.work/'assets'
 assets.mkdir()
 payload = {name:(app/name).read_bytes() for name in paths}
-manifest = {'format':'mbs-modules-v1','fromVersion':'0.1.18','toVersion':version,
+manifest = {'format':'mbs-modules-v1','fromVersion':args.from_version,'toVersion':version,
             'files':[{'path':name,'sha256':hashlib.sha256(data).hexdigest()} for name,data in payload.items()]}
-package = assets/f'MbsOffice-modules-{version}-from-0.1.18.zip'
+package = assets/f'MbsOffice-modules-{version}-from-{args.from_version}.zip'
 with zipfile.ZipFile(package,'w',compression=zipfile.ZIP_DEFLATED,compresslevel=9) as z:
     for name,data in {'manifest.json':(json.dumps(manifest,sort_keys=True)+'\n').encode(),**payload}.items():
         entry = zipfile.ZipInfo(name,(2020,1,1,0,0,0))

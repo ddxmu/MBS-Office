@@ -6,6 +6,8 @@ extern "C" {
 void MbsStartAccountSession(void);
 // Presents the Mbs Office account window on the main queue.
 void MbsShowLocalAccount(void);
+// Explicit login buttons always present the login form, including when signed in.
+void MbsShowLoginForm(void);
 // Describes the independent Mbs account service and self-developed features.
 const char *MbsLocalAccountCapabilities(void);
 // Caller owns this UTF-8 JSON buffer and must free() it. No password is returned.

@@ -3,6 +3,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import re
 from pathlib import Path
 import secrets
 import sqlite3
@@ -13,6 +14,7 @@ import time
 import unittest
 import urllib.error
 import urllib.request
+import urllib.parse
 import uuid
 
 from cryptography.exceptions import InvalidSignature
@@ -112,6 +114,46 @@ class EditorLicenseTest(unittest.TestCase):
 
 @unittest.skipUnless(os.environ.get("MBS_ADMIN_SOURCE"), "Set MBS_ADMIN_SOURCE to test the deployed handler candidate")
 class EditorLicenseHTTPTest(unittest.TestCase):
+    def test_activation_admin_redemption_renewal_and_revocation(self):
+        email = secrets.token_hex(8)+"@example.invalid"
+        _, registered, _ = self.call("register",{"email":email,"password":secrets.token_urlsafe(20)})
+        token = registered["token"]
+        with sqlite3.connect(self.app.DB_PATH) as db: user_id = db.execute("select id from mbs_users where email=?",(email,)).fetchone()[0]
+        base = self.base.removesuffix("/api/mbs/")
+        cookie = self.app.COOKIE_NAME+"="+self.app.session_cookie()
+        request = urllib.request.Request(base+"/admin/mbs-licenses",headers={"Cookie":cookie})
+        with urllib.request.urlopen(request) as response:
+            page = response.read().decode()
+        csrf = re.search(r'name="csrf" value="([0-9a-f]{64})"',page).group(1)
+        def admin(path, fields):
+            data = urllib.parse.urlencode(fields).encode()
+            request = urllib.request.Request(base+path,data=data,headers={"Cookie":cookie,"Origin":"https://ttys.ddxmu.com"})
+            try:
+                with urllib.request.urlopen(request) as response: return response.status,response.read().decode()
+            except urllib.error.HTTPError as error: return error.code,error.read().decode()
+        status,_ = admin("/admin/mbs-licenses/create",{"userId":user_id,"days":30,"maxDevices":1,"plan":"vip"})
+        self.assertEqual(status,403)
+        status,page = admin("/admin/mbs-licenses/create",{"csrf":csrf,"userId":user_id,"days":30,"maxDevices":1,"plan":"vip"})
+        self.assertEqual(status,200)
+        code = re.search(r"MBS-(?:[0-9A-F]{8}-){3}[0-9A-F]{8}",page).group()
+        device,nonce = str(uuid.uuid4()),secrets.token_urlsafe(32)
+        fields = {"code":code,"deviceId":device,"nonce":nonce}
+        status,_,_ = self.call("activation/redeem",fields,token,origin="https://wrong.example")
+        self.assertEqual(status,403)
+        status,result,_ = self.call("activation/redeem",fields,token)
+        self.assertEqual(status,200)
+        issuer = EditorLicenseIssuer(self.temp.name)
+        claims = verify(result,issuer.public_key_base64,device,nonce,time.time())
+        self.assertEqual(claims["activation"]["plan"],"vip")
+        _,renewal,_ = self.call("editor/license",{"deviceId":device,"nonce":nonce},token)
+        self.assertIn("activation",verify(renewal,issuer.public_key_base64,device,nonce,time.time()))
+        self.assertEqual(admin("/admin/mbs-licenses/revoke",{"csrf":csrf,"id":claims["activation"]["id"]})[0],200)
+        request = urllib.request.Request(base+"/api/mbs/activation/status?deviceId="+device,headers={"Authorization":"Bearer "+token})
+        with urllib.request.urlopen(request) as response: result = json.load(response)
+        self.assertIsNone(result["activation"])
+        _,renewal,_ = self.call("editor/license",{"deviceId":device,"nonce":nonce},token)
+        self.assertNotIn("activation",verify(renewal,issuer.public_key_base64,device,nonce,time.time()))
+
     @classmethod
     def setUpClass(cls):
         cls.temp = tempfile.TemporaryDirectory()

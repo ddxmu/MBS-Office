@@ -4,3 +4,6 @@ dist/
 *.key
 *.p12
 *.mobileprovision
+
+__pycache__/
+*.pyc

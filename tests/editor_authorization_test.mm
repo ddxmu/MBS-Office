@@ -32,6 +32,15 @@ int main(void) { @autoreleasepool {
     };
     NSData *envelope = sign(valid);
     NSCAssert(MbsVerifyEditorGrant(envelope,publicBytes,nonce,email,device,session,now),@"valid grant");
+    NSMutableDictionary *activated = [valid mutableCopy];
+    activated[@"activation"] = @{@"id":@1,@"plan":@"vip",@"expiresAt":@(now+86400),@"maxDevices":@1,@"deviceId":device};
+    NSCAssert(MbsVerifyEditorGrant(sign(activated),publicBytes,nonce,email,device,session,now),@"signed activation grant");
+    for (NSDictionary *mutation in @[@{@"id":@0},@{@"plan":@"admin"},@{@"expiresAt":@(now+1)},
+        @{@"deviceId":NSUUID.UUID.UUIDString},@{@"maxDevices":@0},@{@"maxDevices":@YES}]) {
+        NSMutableDictionary *metadata = [activated[@"activation"] mutableCopy]; [metadata addEntriesFromDictionary:mutation];
+        NSMutableDictionary *claims = [activated mutableCopy]; claims[@"activation"] = metadata;
+        NSCAssert(!MbsVerifyEditorGrant(sign(claims),publicBytes,nonce,email,device,session,now),@"invalid activation metadata");
+    }
     NSCAssert(!MbsVerifyEditorGrant(envelope,publicBytes,@"different",email,device,session,now),@"nonce replay");
     NSCAssert(!MbsVerifyEditorGrant(envelope,publicBytes,nonce,@"other@example.invalid",device,session,now),@"account binding");
     NSCAssert(!MbsVerifyEditorGrant(envelope,publicBytes,nonce,email,NSUUID.UUID.UUIDString,session,now),@"device binding");

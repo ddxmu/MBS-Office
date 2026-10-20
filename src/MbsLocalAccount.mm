@@ -182,6 +182,12 @@ willPerformHTTPRedirection:(NSHTTPURLResponse *)response
 }
 @end
 
+@interface MbsAccountPanel : NSPanel @end
+@implementation MbsAccountPanel
+- (BOOL)canBecomeKeyWindow { return YES; }
+- (BOOL)canBecomeMainWindow { return NO; }
+@end
+
 @interface MbsAccountBackdrop : NSView
 @end
 @implementation MbsAccountBackdrop
@@ -282,6 +288,8 @@ static NSImage *MbsEmbeddedAccountArtwork(void) {
 @property(nonatomic, assign) NSInteger dailyFreeLimit;
 @property(nonatomic, copy) NSString *membershipLabel;
 @property(nonatomic, strong) NSPanel *accountPanel;
+@property(nonatomic, strong) NSTextField *activationCode, *activationSummary;
+@property(nonatomic, strong) NSButton *activationButton;
 @property(nonatomic, strong) NSTextField *accountPanelEmail;
 @property(nonatomic, strong) NSTextField *accountPanelMembership;
 @property(nonatomic, strong) NSTextField *accountPanelAuthorization;
@@ -295,6 +303,8 @@ static NSImage *MbsEmbeddedAccountArtwork(void) {
 @property(nonatomic, assign) BOOL restoringSession;
 + (instancetype)shared;
 - (void)show;
+- (void)showForStartup;
+- (void)showLoginForm;
 - (void)startSession;
 - (void)didSignInWithToken:(NSString *)token user:(NSDictionary *)user notify:(BOOL)notify;
 - (void)submit:(id)sender;
@@ -312,6 +322,8 @@ static NSImage *MbsEmbeddedAccountArtwork(void) {
 - (void)retryConnection:(id)sender;
 - (void)postAccountChange;
 - (void)authorizationChanged:(NSNotification *)note;
+- (void)redeemActivationCode:(id)sender;
+- (void)updateActivationState:(NSDictionary *)state;
 @end
 
 static NSTextField *AccountLabel(NSView *view, NSString *text, NSRect frame) {
@@ -331,11 +343,14 @@ static NSTextField *AccountLabel(NSView *view, NSString *text, NSRect frame) {
         controller.dailyFreeLimit = 3;
         [[NSNotificationCenter defaultCenter] addObserver:controller selector:@selector(authorizationChanged:)
             name:@"MbsEditorAuthorizationDidChange" object:nil];
+        [[NSNotificationCenter defaultCenter] addObserver:controller selector:@selector(applicationResignedActive:)
+            name:NSApplicationDidResignActiveNotification object:nil];
     });
     return controller;
 }
 
 - (void)startSession {
+    [self ensureAccountMenu];
     if (self.restoringSession || self.session) return;
     self.deferredSession = nil;
     NSDictionary *saved = MbsLoadSession();
@@ -343,7 +358,7 @@ static NSTextField *AccountLabel(NSView *view, NSString *text, NSRect frame) {
     NSString *email = [saved[@"email"] isKindOfClass:NSString.class] ? saved[@"email"] : nil;
     if (token.length < 32 || token.length > 128 || !ValidEmail(email)) {
         MbsDeleteSession();
-        [self show];
+        [self showForStartup];
         return;
     }
     [self prepareWindow];
@@ -377,7 +392,7 @@ static NSTextField *AccountLabel(NSView *view, NSString *text, NSRect frame) {
             } else if (unavailable && MbsCanRestoreAccountSession(token.UTF8String,email.UTF8String)) {
                 self.deferredSession = saved;
             }
-            [self show];
+            [self showForStartup];
             self.retry.hidden = expired;
             self.webLogin.hidden = !self.retry.hidden;
             self.status.stringValue = expired ? @"登录状态已过期，请重新输入密码。" :
@@ -424,6 +439,7 @@ static NSTextField *AccountLabel(NSView *view, NSString *text, NSRect frame) {
 }
 
 - (void)showStatusPanel {
+    if (!NSApp.isActive) { [self hideStatusPanel]; return; }
     if (!self.sessionEmail.length) {
         [self hideStatusPanel];
         return;
@@ -433,13 +449,13 @@ static NSTextField *AccountLabel(NSView *view, NSString *text, NSRect frame) {
                                                         styleMask:NSWindowStyleMaskBorderless
                                                           backing:NSBackingStoreBuffered
                                                             defer:NO];
-        self.statusPanel.level = NSFloatingWindowLevel;
+        self.statusPanel.level = NSNormalWindowLevel;
+        self.statusPanel.hidesOnDeactivate = YES;
         self.statusPanel.opaque = NO;
         self.statusPanel.backgroundColor = NSColor.clearColor;
         self.statusPanel.hasShadow = YES;
         self.statusPanel.ignoresMouseEvents = YES;
-        self.statusPanel.collectionBehavior = NSWindowCollectionBehaviorCanJoinAllSpaces |
-                                               NSWindowCollectionBehaviorFullScreenAuxiliary;
+        self.statusPanel.collectionBehavior = NSWindowCollectionBehaviorFullScreenAuxiliary;
         NSVisualEffectView *background = [[NSVisualEffectView alloc] initWithFrame:self.statusPanel.contentView.bounds];
         background.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
         background.material = NSVisualEffectMaterialHeaderView;
@@ -472,7 +488,7 @@ static NSTextField *AccountLabel(NSView *view, NSString *text, NSRect frame) {
         [self.statusPanel.parentWindow removeChildWindow:self.statusPanel];
         [main addChildWindow:self.statusPanel ordered:NSWindowAbove];
     }
-    [self.statusPanel orderFrontRegardless];
+    [self.statusPanel orderFront:nil];
     [self.statusDismissTimer invalidate];
     self.statusDismissTimer = [NSTimer scheduledTimerWithTimeInterval:3.0
                                                                  target:self
@@ -491,19 +507,18 @@ static NSTextField *AccountLabel(NSView *view, NSString *text, NSRect frame) {
 
 - (void)ensureAccountPopover {
     if (self.accountPanel) return;
-    self.accountPanel = [[NSPanel alloc] initWithContentRect:NSMakeRect(0, 0, 368, 292)
+    self.accountPanel = [[MbsAccountPanel alloc] initWithContentRect:NSMakeRect(0, 0, 368, 384)
                                                      styleMask:NSWindowStyleMaskBorderless | NSWindowStyleMaskNonactivatingPanel
                                                        backing:NSBackingStoreBuffered
                                                          defer:NO];
     self.accountPanel.releasedWhenClosed = NO;
-    self.accountPanel.level = NSFloatingWindowLevel;
+    self.accountPanel.level = NSNormalWindowLevel;
     self.accountPanel.opaque = NO;
     self.accountPanel.backgroundColor = NSColor.clearColor;
     self.accountPanel.hasShadow = YES;
-    self.accountPanel.hidesOnDeactivate = NO;
+    self.accountPanel.hidesOnDeactivate = YES;
     self.accountPanel.ignoresMouseEvents = NO;
-    self.accountPanel.collectionBehavior = NSWindowCollectionBehaviorCanJoinAllSpaces |
-                                            NSWindowCollectionBehaviorFullScreenAuxiliary;
+    self.accountPanel.collectionBehavior = NSWindowCollectionBehaviorFullScreenAuxiliary;
 
     NSVisualEffectView *background = [[NSVisualEffectView alloc] initWithFrame:self.accountPanel.contentView.bounds];
     background.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
@@ -517,45 +532,60 @@ static NSTextField *AccountLabel(NSView *view, NSString *text, NSRect frame) {
 
     NSTextField *title = [NSTextField labelWithString:@"Mbs Office 账号"];
     title.font = [NSFont systemFontOfSize:18.0 weight:NSFontWeightSemibold];
-    title.frame = NSMakeRect(24, 246, 320, 24);
+    title.frame = NSMakeRect(24, 338, 320, 24);
     [self.accountPanel.contentView addSubview:title];
 
     self.accountPanelEmail = [NSTextField labelWithString:@""];
     self.accountPanelEmail.font = [NSFont systemFontOfSize:15.0 weight:NSFontWeightMedium];
     self.accountPanelEmail.lineBreakMode = NSLineBreakByTruncatingMiddle;
-    self.accountPanelEmail.frame = NSMakeRect(24, 211, 320, 22);
+    self.accountPanelEmail.frame = NSMakeRect(24, 303, 320, 22);
     [self.accountPanel.contentView addSubview:self.accountPanelEmail];
 
     self.accountPanelMembership = [NSTextField labelWithString:@""];
     self.accountPanelMembership.font = [NSFont systemFontOfSize:13.0 weight:NSFontWeightRegular];
     self.accountPanelMembership.textColor = NSColor.secondaryLabelColor;
-    self.accountPanelMembership.frame = NSMakeRect(24, 176, 320, 22);
+    self.accountPanelMembership.frame = NSMakeRect(24, 268, 320, 22);
     [self.accountPanel.contentView addSubview:self.accountPanelMembership];
 
-    NSBox *separator = [[NSBox alloc] initWithFrame:NSMakeRect(24, 157, 320, 1)];
+    NSBox *separator = [[NSBox alloc] initWithFrame:NSMakeRect(24, 249, 320, 1)];
     separator.boxType = NSBoxSeparator;
     [self.accountPanel.contentView addSubview:separator];
 
     self.accountPanelUpgrade = [NSButton buttonWithTitle:@"立即升级" target:self action:@selector(openVip:)];
-    self.accountPanelUpgrade.frame = NSMakeRect(24, 101, 320, 38);
+    self.accountPanelUpgrade.frame = NSMakeRect(24, 193, 320, 38);
     self.accountPanelUpgrade.bezelStyle = NSBezelStyleRounded;
     [self.accountPanel.contentView addSubview:self.accountPanelUpgrade];
+
+    self.activationCode = [NSTextField textFieldWithString:@""];
+    self.activationCode.placeholderString = @"输入 Mbs 授权码";
+    self.activationCode.accessibilityLabel = @"Mbs 授权码";
+    self.activationCode.frame = NSMakeRect(24, 139, 226, 28);
+    [self.accountPanel.contentView addSubview:self.activationCode];
+    self.activationButton = [NSButton buttonWithTitle:@"激活" target:self action:@selector(redeemActivationCode:)];
+    self.activationButton.bezelStyle = NSBezelStyleRounded;
+    self.activationButton.frame = NSMakeRect(258, 137, 86, 32);
+    [self.accountPanel.contentView addSubview:self.activationButton];
+    self.activationSummary = [NSTextField labelWithString:@"可由管理员为当前账号生成授权码"];
+    self.activationSummary.font = [NSFont systemFontOfSize:11];
+    self.activationSummary.textColor = NSColor.secondaryLabelColor;
+    self.activationSummary.frame = NSMakeRect(24, 102, 320, 22);
+    [self.accountPanel.contentView addSubview:self.activationSummary];
 
     self.accountPanelLogout = [NSButton buttonWithTitle:@"退出登录" target:self action:@selector(logout:)];
     self.accountPanelLogout.frame = NSMakeRect(24, 52, 320, 30);
     self.accountPanelLogout.bezelStyle = NSBezelStyleTexturedRounded;
     [self.accountPanel.contentView addSubview:self.accountPanelLogout];
 
-    self.accountPanelAuthorization = [NSTextField labelWithString:@"授权状态待验证"];
+    self.accountPanelAuthorization = [NSTextField wrappingLabelWithString:@"授权状态待验证"];
     NSTextField *hint = self.accountPanelAuthorization;
     hint.font = [NSFont systemFontOfSize:11.0 weight:NSFontWeightRegular];
     hint.textColor = NSColor.tertiaryLabelColor;
-    hint.frame = NSMakeRect(24, 20, 320, 18);
+    hint.frame = NSMakeRect(24, 10, 320, 34);
     [self.accountPanel.contentView addSubview:hint];
 }
 
 - (void)showAccountPopoverForWindow:(NSWindow *)window point:(NSPoint)point {
-    if (!self.sessionEmail.length || !window) {
+    if (!self.sessionEmail.length || !window || !NSApp.isActive) {
         [self hideAccountPopover];
         return;
     }
@@ -570,7 +600,7 @@ static NSTextField *AccountLabel(NSView *view, NSString *text, NSRect frame) {
     NSDictionary *grant = authorization ? [NSJSONSerialization JSONObjectWithData:
         [[NSString stringWithUTF8String:authorization] dataUsingEncoding:NSUTF8StringEncoding] options:0 error:nil] : nil;
     free(authorization);
-    self.accountPanelAuthorization.stringValue = grant[@"status"] ?: @"授权状态待验证";
+    [self updateActivationState:grant];
 
     NSPoint screenPoint = [window convertPointToScreen:point];
     NSRect frame = self.accountPanel.frame;
@@ -585,7 +615,7 @@ static NSTextField *AccountLabel(NSView *view, NSString *text, NSRect frame) {
         [self.accountPanel.parentWindow removeChildWindow:self.accountPanel];
         [window addChildWindow:self.accountPanel ordered:NSWindowAbove];
     }
-    [self.accountPanel orderFrontRegardless];
+    [self.accountPanel orderFront:nil];
     [self refreshMembership:NO];
 }
 
@@ -605,7 +635,24 @@ static NSTextField *AccountLabel(NSView *view, NSString *text, NSRect frame) {
 
 - (void)authorizationChanged:(NSNotification *)note {
     if (!self.sessionEmail.length) return;
-    self.accountPanelAuthorization.stringValue = note.userInfo[@"status"] ?: @"授权状态待验证";
+    [self updateActivationState:note.userInfo];
+}
+- (void)updateActivationState:(NSDictionary *)state {
+    self.accountPanelAuthorization.stringValue = state[@"status"] ?: @"授权状态待验证";
+    self.activationButton.enabled = ![state[@"busy"] boolValue];
+    NSDictionary *activation = [state[@"activation"] isKindOfClass:NSDictionary.class] ? state[@"activation"] : nil;
+    if ([state[@"verified"] boolValue] && activation) {
+        NSDateFormatter *format = [NSDateFormatter new]; format.dateFormat = @"yyyy-MM-dd";
+        NSString *date = [format stringFromDate:[NSDate dateWithTimeIntervalSince1970:[activation[@"expiresAt"] doubleValue]]];
+        self.activationSummary.stringValue = [NSString stringWithFormat:@"%@ · 有效至 %@",
+            [activation[@"plan"] isEqual:@"vip"] ? @"Mbs VIP 授权" : @"Mbs 标准授权",date];
+        if ([state[@"status"] isEqual:@"授权码已激活"]) self.activationCode.stringValue = @"";
+    } else self.activationSummary.stringValue = @"可由管理员为当前账号生成授权码";
+}
+- (void)redeemActivationCode:(id)sender {
+    if (!self.sessionEmail.length) return;
+    self.activationButton.enabled = NO;
+    MbsRedeemActivationCode(self.activationCode.stringValue.UTF8String);
 }
 
 - (void)refreshMembership:(BOOL)force {
@@ -699,7 +746,27 @@ static NSTextField *AccountLabel(NSView *view, NSString *text, NSRect frame) {
 }
 
 - (void)membershipTimerFired:(NSTimer *)timer {
+    [self ensureAccountMenu];
     [self refreshMembership:NO];
+}
+
+- (void)ensureAccountMenu {
+    NSMenu *menu = [NSApp.mainMenu itemWithTitle:@"账号"].submenu;
+    if (!menu || [menu itemWithTitle:@"Mbs 账号与授权…"]) return;
+    NSMenuItem *item = [[NSMenuItem alloc] initWithTitle:@"Mbs 账号与授权…" action:@selector(show) keyEquivalent:@""];
+    item.target = self;
+    [menu insertItem:item atIndex:0];
+    [menu insertItem:NSMenuItem.separatorItem atIndex:1];
+}
+
+- (void)applicationResignedActive:(NSNotification *)note {
+    [self hideStatusPanel];
+    [self hideAccountPopover];
+}
+
+- (void)showForStartup {
+    [self prepareWindow];
+    if (NSApp.isActive) [self show];
 }
 
 - (void)show {
@@ -709,12 +776,40 @@ static NSTextField *AccountLabel(NSView *view, NSString *text, NSRect frame) {
         [self postAccountChange];
         [self.window orderOut:nil];
         [self.window resignKeyWindow];
-        [self showStatusPanel];
+        [self hideStatusPanel];
+        NSWindow *host = NSApp.mainWindow;
+        if (!host || host == self.window) {
+            for (NSWindow *candidate in NSApp.windows) {
+                if (candidate != self.window && candidate.isVisible &&
+                    candidate.frame.size.width>600 && candidate.frame.size.height>300) { host = candidate; break; }
+            }
+        }
+        if (host && host != self.window) {
+            NSRect bounds = host.contentView.bounds;
+            [self showAccountPopoverForWindow:host point:NSMakePoint(NSMaxX(bounds)-32,NSMaxY(bounds)-64)];
+        }
         return;
     }
     [self prepareWindow];
     [NSApp activateIgnoringOtherApps:YES];
     [self.window makeKeyAndOrderFront:nil];
+}
+
+- (void)showLoginForm {
+    [self prepareWindow];
+    self.mode.selectedSegment = 0;
+    [self changeMode:nil];
+    [self hideAccountPopover];
+    [self hideStatusPanel];
+    if (self.sessionEmail.length) {
+        self.email.stringValue = self.sessionEmail;
+        self.password.stringValue = @"";
+        self.status.stringValue = [NSString stringWithFormat:@"当前账号：%@",self.sessionEmail];
+    }
+    [NSApp activateIgnoringOtherApps:YES];
+    [self.window makeKeyAndOrderFront:nil];
+    [self.window makeFirstResponder:self.password.stringValue.length ? self.email :
+        (self.email.stringValue.length ? self.password : self.email)];
 }
 
 - (void)prepareWindow {
@@ -726,7 +821,7 @@ static NSTextField *AccountLabel(NSView *view, NSString *text, NSRect frame) {
         self.window.title = @"Mbs Office 账号";
         self.window.releasedWhenClosed = NO;
         self.window.delegate = self;
-        self.window.level = NSFloatingWindowLevel;
+        self.window.level = NSNormalWindowLevel;
         self.window.hidesOnDeactivate = YES;
         [self.window center];
 
@@ -918,7 +1013,7 @@ static NSTextField *AccountLabel(NSView *view, NSString *text, NSRect frame) {
         if (controller.remember.state != NSControlStateValueOn || !saved) MbsDeleteSession();
         [controller didSignInWithToken:token user:user notify:YES];
         if (!saved) {
-            [controller.window makeKeyAndOrderFront:nil];
+            if (NSApp.isActive) [controller.window makeKeyAndOrderFront:nil];
             controller.status.stringValue = @"登录成功，但无法保存登录状态。请检查本机账户文件夹权限。";
         }
     }];
@@ -1055,7 +1150,7 @@ static NSTextField *AccountLabel(NSView *view, NSString *text, NSRect frame) {
             }
             [strongSelf didSignInWithToken:token user:user notify:YES];
             if (!saved) {
-                [strongSelf.window makeKeyAndOrderFront:nil];
+                if (NSApp.isActive) [strongSelf.window makeKeyAndOrderFront:nil];
                 strongSelf.status.stringValue = @"登录成功，但无法保存登录状态。请检查本机账户文件夹权限。";
             }
         } else {
@@ -1108,7 +1203,14 @@ void MbsStartAccountSession(void) {
 }
 
 void MbsShowLocalAccount(void) {
-    dispatch_async(dispatch_get_main_queue(), ^{ [[MbsLocalAccountController shared] show]; });
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [NSApp activateIgnoringOtherApps:YES];
+        dispatch_async(dispatch_get_main_queue(),^{ [[MbsLocalAccountController shared] show]; });
+    });
+}
+
+void MbsShowLoginForm(void) {
+    dispatch_async(dispatch_get_main_queue(), ^{ [[MbsLocalAccountController shared] showLoginForm]; });
 }
 
 const char *MbsLocalAccountCapabilities(void) {
