@@ -1,0 +1,17 @@
+#pragma once
+#ifdef __cplusplus
+extern "C" {
+#endif
+bool MbsHasVerifiedEditorLicense(void);
+void MbsRequestEditorLicense(const char *token, const char *email);
+void MbsResetEditorLicense(void);
+char *MbsCopyEditorAuthorizationState(void);
+#ifdef __cplusplus
+}
+#endif
+
+#ifdef __OBJC__
+#import <Foundation/Foundation.h>
+NSDictionary *MbsVerifyEditorGrant(NSData *response, NSData *publicKey,
+    NSString *nonce, NSString *email, NSString *device, NSString *sessionHash, NSTimeInterval now);
+#endif

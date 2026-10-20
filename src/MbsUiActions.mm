@@ -2,6 +2,7 @@
 #import <objc/runtime.h>
 #import "MbsLocalAccount.h"
 #import "MbsUpdates.h"
+#import "MbsNativeLoginRecovery.h"
 #include <string.h>
 
 namespace kso_qt {
@@ -71,11 +72,6 @@ static BOOL isRemovedAssistantText(NSString *text) {
 static NSString *updated(NSString *text) {
     if (isRemovedAssistantText(text)) return @"";
     NSString *result = [text stringByReplacingOccurrencesOfString:@"免费使用企业版" withString:@"版本升级"];
-    const char *email = MbsCurrentAccountEmail();
-    if (email && ([result containsString:@"立即登录"] || [result isEqualToString:@"登录"])) {
-        result = MbsAccountInitialForEmail([NSString stringWithUTF8String:email]);
-    }
-    free((void *)email);
     return result;
 }
 static BOOL isUpgradeText(NSString *text) {
@@ -125,27 +121,38 @@ static void InstallMbsWorkspaceURLHook(void) {
         }
     });
 }
-static kso_qt::QAbstractButton *MbsAccountButton = nullptr;
-static kso_qt::QLabel *MbsAccountLabel = nullptr;
-static NSMutableArray<NSValue *> *MbsAccountButtons;
-static NSMutableArray<NSValue *> *MbsAccountLabels;
 static BOOL MbsAccountSignedIn = NO;
 static NSPanel *MbsAccountBadgePanel;
 static NSTextField *MbsAccountBadgeLabel;
-static void ensureAccountWidgetStorage(void) {
-    static dispatch_once_t once;
-    dispatch_once(&once, ^{
-        MbsAccountButtons = [NSMutableArray array];
-        MbsAccountLabels = [NSMutableArray array];
-    });
-}
-static void rememberAccountWidget(NSMutableArray<NSValue *> *storage, const void *widget) {
-    if (!widget) return;
-    ensureAccountWidgetStorage();
-    @synchronized(storage) {
-        NSValue *value = [NSValue valueWithPointer:widget];
-        if (![storage containsObject:value]) [storage addObject:value];
+static id MbsNativeAccessibilityValue(id item,NSString *attribute);
+static NSRect MbsAccountControlFrame(NSWindow *window) {
+    NSMutableArray *pending = [NSMutableArray arrayWithObject:window];
+    for (NSUInteger inspected=0;pending.count && inspected<256;++inspected) {
+        id<NSAccessibility> item = pending.lastObject;
+        [pending removeLastObject];
+        NSString *role = [item respondsToSelector:@selector(accessibilityRole)] ? item.accessibilityRole : nil;
+        NSString *title = [item respondsToSelector:@selector(accessibilityTitle)] ? item.accessibilityTitle : nil;
+        NSString *label = [item respondsToSelector:@selector(accessibilityLabel)] ? item.accessibilityLabel : nil;
+        if ([role isEqualToString:NSAccessibilityButtonRole] &&
+            ([title isEqualToString:@"立即登录"] || [label isEqualToString:@"立即登录"]) &&
+            [item respondsToSelector:@selector(accessibilityFrame)]) {
+            NSRect frame = item.accessibilityFrame;
+            if (frame.size.width >= 20 && frame.size.width < 200 &&
+                frame.size.height >= 12 && frame.size.height < 60) return frame;
+        }
+        NSArray *children = [item respondsToSelector:@selector(accessibilityChildren)] ? item.accessibilityChildren : nil;
+        if (!children.count) children = MbsNativeAccessibilityValue(item,NSAccessibilityChildrenAttribute);
+        if ([children isKindOfClass:NSArray.class]) [pending addObjectsFromArray:children];
     }
+    // The document title bar is not exposed through the editor's AX tree.
+    // Its account control has a fixed trailing inset in this bundled layout.
+    NSString *title = window.title ?: @"";
+    if ([title.pathExtension.lowercaseString length] || [title hasPrefix:@"文字文稿"] ||
+        [title hasPrefix:@"工作簿"] || [title hasPrefix:@"演示文稿"]) {
+        NSRect bounds = window.contentView.bounds;
+        return [window convertRectToScreen:NSMakeRect(NSMaxX(bounds)-92,NSMaxY(bounds)-33,68,22)];
+    }
+    return NSZeroRect;
 }
 static void MbsRefreshAccountBadge(void) {
     if (!MbsAccountSignedIn) {
@@ -161,6 +168,8 @@ static void MbsRefreshAccountBadge(void) {
         }
     }
     if (!main) return;
+    NSRect target = MbsAccountControlFrame(main);
+    if (NSIsEmptyRect(target)) { [MbsAccountBadgePanel orderOut:nil]; return; }
     if (!MbsAccountBadgePanel) {
         MbsAccountBadgePanel = [[NSPanel alloc] initWithContentRect:NSMakeRect(0, 0, 42, 42)
                                                             styleMask:NSWindowStyleMaskBorderless | NSWindowStyleMaskNonactivatingPanel
@@ -169,7 +178,7 @@ static void MbsRefreshAccountBadge(void) {
         MbsAccountBadgePanel.releasedWhenClosed = NO;
         MbsAccountBadgePanel.level = NSNormalWindowLevel;
         MbsAccountBadgePanel.opaque = NO;
-        MbsAccountBadgePanel.backgroundColor = NSColor.clearColor;
+        MbsAccountBadgePanel.backgroundColor = NSColor.windowBackgroundColor;
         MbsAccountBadgePanel.ignoresMouseEvents = YES;
         MbsAccountBadgePanel.collectionBehavior = NSWindowCollectionBehaviorFullScreenAuxiliary;
         MbsAccountBadgeLabel = [NSTextField labelWithString:@""];
@@ -186,8 +195,9 @@ static void MbsRefreshAccountBadge(void) {
     NSString *initial = email ? MbsAccountInitialForEmail([NSString stringWithUTF8String:email]) : @"";
     MbsAccountBadgeLabel.stringValue = initial;
     free((void *)email);
-    NSRect bounds = main.contentView.bounds;
-    NSRect target = [main convertRectToScreen:NSMakeRect(NSMaxX(bounds) - 158.0, NSMaxY(bounds) - 58.0, 42.0, 42.0)];
+    CGFloat diameter = MIN(18.0,target.size.height);
+    MbsAccountBadgeLabel.frame = NSMakeRect(0,(target.size.height-diameter)/2,diameter,diameter);
+    MbsAccountBadgeLabel.layer.cornerRadius = diameter/2;
     [MbsAccountBadgePanel setFrame:target display:NO];
     if (MbsAccountBadgePanel.parentWindow != main) {
         [MbsAccountBadgePanel.parentWindow removeChildWindow:MbsAccountBadgePanel];
@@ -198,38 +208,17 @@ static void MbsRefreshAccountBadge(void) {
 static void MbsRefreshAccountHeader(NSNumber *signedIn) {
     const char *email = MbsCurrentAccountEmail();
     MbsAccountSignedIn = signedIn ? signedIn.boolValue : (email != NULL);
-    NSString *text = (MbsAccountSignedIn && email) ?
-        MbsAccountInitialForEmail([NSString stringWithUTF8String:email]) : @"立即登录";
-    kso_qt::QString value = literal(text);
-    if (MbsAccountButton) MbsAccountButton->setText(value);
-    if (MbsAccountLabel) MbsAccountLabel->setText(value);
-    @synchronized(MbsAccountButtons) {
-        for (NSValue *item in [MbsAccountButtons copy]) {
-            ((kso_qt::QAbstractButton *)item.pointerValue)->setText(value);
-        }
-    }
-    @synchronized(MbsAccountLabels) {
-        for (NSValue *item in [MbsAccountLabels copy]) {
-            ((kso_qt::QLabel *)item.pointerValue)->setText(value);
-        }
-    }
+    // Native header widgets are owned by their windows. Never retain raw Qt
+    // pointers across account notifications or document-window destruction.
     free((void *)email);
     MbsRefreshAccountBadge();
 }
 static void labelText(kso_qt::QLabel*label,const kso_qt::QString&text) {
     NSString *value=read(text),*replacement=updated(value);
-    if ([value containsString:@"立即登录"] || [value isEqualToString:@"登录"]) {
-        MbsAccountLabel = label;
-        rememberAccountWidget(MbsAccountLabels, label);
-    }
     if(![value isEqualToString:replacement])label->setText(literal(replacement));else label->setText(text);
 }
 static void buttonText(kso_qt::QAbstractButton*button,const kso_qt::QString&text) {
     NSString *value=read(text),*replacement=updated(value);
-    if ([value containsString:@"立即登录"] || [value isEqualToString:@"登录"]) {
-        MbsAccountButton = button;
-        rememberAccountWidget(MbsAccountButtons, button);
-    }
     if(![value isEqualToString:replacement])button->setText(literal(replacement));else button->setText(text);
 }
 static NSString *property(kso_qt::QObject*object,const char*key) {
@@ -272,7 +261,6 @@ static void buttonMouseRelease(kso_qt::QAbstractButton *button,kso_qt::QMouseEve
         return;
     }
     if ([text containsString:@"立即登录"] || [text isEqualToString:@"登录"]) {
-        MbsAccountButton = button;
         MbsShowLocalAccount();
         return;
     }
@@ -285,7 +273,6 @@ static bool maybeShowLocalAccount(void *button) {
         MbsShowUpdates(); return true;
     }
     if ([text containsString:@"立即登录"] || [text isEqualToString:@"登录"]) {
-        MbsAccountButton = static_cast<kso_qt::QAbstractButton *>(button);
         MbsShowLocalAccount(); return true;
     }
     return false;
@@ -359,36 +346,16 @@ __attribute__((used,section("__DATA,__interpose"))) static const Interpose actio
     {(const void*)&routeClick,(const void*)&kso_qt::QCoreApplication::notifyInternal2}
 };
 static id MbsLoginMouseMonitor;
-static id MbsNativeAccessibilityValue(id item,NSString *attribute) {
-    return [item respondsToSelector:@selector(accessibilityAttributeValue:)] ? [item accessibilityAttributeValue:attribute] : nil;
-}
 static void MbsUseNativeOfflineAction(NSWindow *window) {
     if (!NSThread.isMainThread || !window.isVisible || ![window.title isEqualToString:@"账号登录"]) return;
     static BOOL handling = NO;
     if (handling) return;
     handling = YES;
-    // Invoke the same native button as a normal "稍后登录" press. Its callback
-    // completes the editor's offline flow; performClose only hides the window.
-    NSMutableArray *pending = [NSMutableArray arrayWithObject:window];
-    for (NSUInteger inspected=0;pending.count && inspected<256;++inspected) {
-        id<NSAccessibility> item = pending.lastObject;
-        [pending removeLastObject];
-        NSString *role = [item respondsToSelector:@selector(accessibilityRole)] ? item.accessibilityRole : nil;
-        if (!role) role = MbsNativeAccessibilityValue(item,NSAccessibilityRoleAttribute);
-        NSString *label = [item respondsToSelector:@selector(accessibilityLabel)] ? item.accessibilityLabel : nil;
-        NSString *title = [item respondsToSelector:@selector(accessibilityTitle)] ? item.accessibilityTitle : nil;
-        if (!title) title = MbsNativeAccessibilityValue(item,NSAccessibilityTitleAttribute);
-        if (!label) label = MbsNativeAccessibilityValue(item,NSAccessibilityDescriptionAttribute);
-        if ([role isEqualToString:NSAccessibilityButtonRole] &&
-            ([label isEqualToString:@"稍后登录"] || [title isEqualToString:@"稍后登录"])) {
-            if ([item respondsToSelector:@selector(accessibilityPerformAction:)]) [(id)item accessibilityPerformAction:NSAccessibilityPressAction];
-            else if ([item respondsToSelector:@selector(accessibilityPerformPress)]) [item accessibilityPerformPress];
-            break;
-        }
-        NSArray *children = [item respondsToSelector:@selector(accessibilityChildren)] ? item.accessibilityChildren : nil;
-        if (!children.count) children = MbsNativeAccessibilityValue(item,NSAccessibilityChildrenAttribute);
-        if (children.count) [pending addObjectsFromArray:children];
-    }
+    id later = MbsFailedNativeLoginAction(window);
+    if ([later respondsToSelector:@selector(accessibilityPerformAction:)])
+        [later accessibilityPerformAction:NSAccessibilityPressAction];
+    else if ([later respondsToSelector:@selector(accessibilityPerformPress)])
+        [later accessibilityPerformPress];
     handling = NO;
 }
 static void InstallMbsOfflineActionObserver(void) {
@@ -428,34 +395,23 @@ static void InstallMbsLoginMouseMonitor(void) {
         for (NSWindow *window in NSApp.windows) window.acceptsMouseMovedEvents = YES;
         MbsLoginMouseMonitor = [NSEvent addLocalMonitorForEventsMatchingMask:(NSEventMaskLeftMouseUp | NSEventMaskMouseMoved) handler:^NSEvent *(NSEvent *event) {
             NSWindow *window=event.window;
-            NSView *content=window.contentView;
             NSPoint point=event.locationInWindow;
-            NSRect bounds=content ? content.bounds : NSZeroRect;
             BOOL isMbsAiWindow = [window.title isEqualToString:@"AI 设置"] ||
                                  [window.title isEqualToString:@"AI"];
             if (event.type == NSEventTypeMouseMoved) {
                 MbsRefreshAccountBadge();
                 // Keep the hover target deliberately small: only the top-right
                 // account control can open the account card.
-                BOOL accountHoverHit = !isMbsAiWindow && bounds.size.width > 600 &&
-                    bounds.size.height > 300 && point.x >= NSMaxX(bounds) - 190 &&
-                    point.y >= NSMaxY(bounds) - 180 && point.y <= NSMaxY(bounds) - 5;
+                NSPoint screenPoint = [window convertPointToScreen:point];
+                BOOL accountHoverHit = !isMbsAiWindow && MbsAccountSignedIn &&
+                    MbsAccountBadgePanel.isVisible && MbsAccountBadgePanel.parentWindow == window &&
+                    NSPointInRect(screenPoint,MbsAccountBadgePanel.frame);
                 if (accountHoverHit) {
                     MbsAccountHoverAtWindow((__bridge void *)window, point.x, point.y);
                 } else {
                     MbsHideAccountPopover();
                 }
                 return event;
-            }
-            // The vendor header can swallow the button event before the
-            // Qt-level hook sees it. Do not use a coordinate-wide upgrade
-            // fallback: neighboring header controls must remain ordinary.
-            BOOL isLoginLabelHit = !isMbsAiWindow && bounds.size.width > 600 &&
-                bounds.size.height > 300 && point.x >= NSMaxX(bounds)-170 &&
-                point.y >= NSMaxY(bounds)-175 && point.y <= NSMaxY(bounds)-5;
-            if (isLoginLabelHit) {
-                MbsShowLocalAccount();
-                return (NSEvent *)nil;
             }
             return event;
         }];

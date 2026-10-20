@@ -1,6 +1,7 @@
-// Local UI-feature adaptation. This does not change subscription or license checks.
+// Mbs-owned authorization is verified independently of vendor subscriptions.
 #include <string.h>
 #include <stdint.h>
+#include "MbsEditorAuthorization.h"
 
 namespace kso_qt { class QString; }
 namespace krt { namespace kcmc {
@@ -18,7 +19,7 @@ static bool localFeatureEnabled(const char *name)
 }
 
 // Loaded by the main application only; helper programs remain unchanged.
-// Account and authorization decisions delegate upstream; only cloud UI is excluded.
+// Helpers remain unchanged; the editor adapter queries one Mbs-specific key.
 struct Interpose { const void *replacement; const void *original; };
 __attribute__((used, section("__DATA,__interpose")))
 static const Interpose offlineFeatures = {
@@ -36,6 +37,7 @@ static const char *disabledSupport[] = {
 static bool localBrandSupported(const char *name)
 {
     if (name) {
+        if (strcmp(name, "MbsEditorLicenseVerified") == 0) return MbsHasVerifiedEditorLicense();
         if (strcmp(name, "WppNewSlideNoDocer") == 0) return true;
         for (const char *key : disabledSupport) if (strcmp(name,key) == 0) return false;
     }
@@ -66,6 +68,7 @@ static bool localStringEnabled(const kso_qt::QString &name)
 }
 static bool localStringSupported(const kso_qt::QString &name)
 {
+    if (sameFeature(name, "MbsEditorLicenseVerified")) return MbsHasVerifiedEditorLicense();
     if (sameFeature(name, "WppNewSlideNoDocer")) return true;
     for (const char *key : disabledSupport) if (sameFeature(name,key)) return false;
     return krt::kcmc::support(name);
