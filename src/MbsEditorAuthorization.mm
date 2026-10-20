@@ -215,6 +215,12 @@ static NSArray *MbsNativeAuthorizationStates(void) {
 @end
 
 bool MbsHasVerifiedEditorLicense(void) { return MbsGetGrantExpiry() > CFAbsoluteTimeGetCurrent()+kCFAbsoluteTimeIntervalSince1970; }
+bool MbsCanRestoreAccountSession(const char *token, const char *email) {
+    MbsEditorAuthorization *value = MbsEditorAuthorization.shared;
+    return token && email && MbsHasVerifiedEditorLicense() &&
+        [value.token isEqualToString:[NSString stringWithUTF8String:token]] &&
+        [value.email isEqualToString:[NSString stringWithUTF8String:email]];
+}
 void MbsRequestEditorLicense(const char *token, const char *email) {
     NSString *copiedToken = token ? [NSString stringWithUTF8String:token] : nil;
     NSString *copiedEmail = email ? [NSString stringWithUTF8String:email] : nil;

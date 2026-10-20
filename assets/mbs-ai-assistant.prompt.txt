@@ -1,0 +1,5 @@
+Generated with the image_gen tool on 2026-10-20.
+Prompt: A polished friendly floating white AI assistant with a dark visor,
+blue eyes, subtle blue and lavender accents, and a luminous orbit suggesting
+a secure connection. Transparent background, no text, logos, UI, or satellite.
+Use: Mbs Office account sign-in artwork. Animation is drawn in AppKit.

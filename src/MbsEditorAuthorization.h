@@ -3,6 +3,8 @@
 extern "C" {
 #endif
 bool MbsHasVerifiedEditorLicense(void);
+// Checks only the signed Mbs account grant, never editor/vendor entitlements.
+bool MbsCanRestoreAccountSession(const char *token, const char *email);
 void MbsRequestEditorLicense(const char *token, const char *email);
 void MbsResetEditorLicense(void);
 char *MbsCopyEditorAuthorizationState(void);

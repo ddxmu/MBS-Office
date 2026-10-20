@@ -8,4 +8,5 @@ clang++ -target arm64-apple-macos13.0 -std=c++17 -dynamiclib \
   src/MbsUpdates.mm src/MbsUiActions.mm src/MbsPluginPaths.mm \
   -Isrc -fobjc-arc -framework AppKit -framework Security \
   -undefined dynamic_lookup -Wno-nullability-completeness -Wno-deprecated-declarations \
+  -Wl,-sectcreate,__TEXT,__mbs_art,assets/mbs-ai-assistant.png \
   -o build/MbsOfflineFlags.dylib

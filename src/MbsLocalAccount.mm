@@ -4,6 +4,8 @@
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <dlfcn.h>
+#include <mach-o/getsect.h>
 #import "MbsLocalAccount.h"
 #import "MbsEditorAuthorization.h"
 
@@ -180,6 +182,24 @@ willPerformHTTPRedirection:(NSHTTPURLResponse *)response
 }
 @end
 
+@interface MbsAccountBackdrop : NSView
+@end
+@implementation MbsAccountBackdrop
+- (void)drawRect:(NSRect)dirtyRect {
+    NSGradient *gradient = [[NSGradient alloc] initWithStartingColor:[NSColor colorWithSRGBRed:0.91 green:0.95 blue:1 alpha:1]
+                                                       endingColor:[NSColor colorWithSRGBRed:0.94 green:0.91 blue:1 alpha:1]];
+    [gradient drawInRect:self.bounds angle:70];
+}
+@end
+
+static NSImage *MbsEmbeddedAccountArtwork(void) {
+    Dl_info image;
+    if (!dladdr((const void *)MbsEmbeddedAccountArtwork,&image)) return nil;
+    unsigned long size = 0;
+    const unsigned char *bytes = getsectiondata((const struct mach_header_64 *)image.dli_fbase,"__TEXT","__mbs_art",&size);
+    return bytes && size ? [[NSImage alloc] initWithData:[NSData dataWithBytes:bytes length:size]] : nil;
+}
+
 @interface MbsAccountLogo : NSView
 @property(nonatomic) BOOL busy;
 @property(nonatomic, strong) NSTimer *animationTimer;
@@ -189,7 +209,9 @@ willPerformHTTPRedirection:(NSHTTPURLResponse *)response
 @implementation MbsAccountLogo
 - (instancetype)initWithFrame:(NSRect)frame {
     if ((self = [super initWithFrame:frame])) {
-        self.image = [[NSImage alloc] initWithContentsOfFile:[NSBundle.mainBundle pathForResource:@"MbsOffice" ofType:@"icns"]];
+        NSString *path = [NSBundle.mainBundle pathForResource:@"MbsStartupAI" ofType:@"png"];
+        self.image = path ? [[NSImage alloc] initWithContentsOfFile:path] : MbsEmbeddedAccountArtwork();
+        if (!self.image) self.image = [[NSImage alloc] initWithContentsOfFile:[NSBundle.mainBundle pathForResource:@"MbsOffice" ofType:@"icns"]];
         self.accessibilityElement = YES;
         self.accessibilityLabel = @"Mbs Office";
     }
@@ -210,6 +232,7 @@ willPerformHTTPRedirection:(NSHTTPURLResponse *)response
 }
 - (void)drawRect:(NSRect)dirtyRect {
     NSRect icon = NSInsetRect(self.bounds,12,12);
+    if (self.busy && self.animationTimer) icon.origin.y += sin(NSProcessInfo.processInfo.systemUptime*2)*4;
     if (self.image) [self.image drawInRect:icon];
     else {
         [NSColor.systemBlueColor setFill];
@@ -217,13 +240,11 @@ willPerformHTTPRedirection:(NSHTTPURLResponse *)response
         [@"M" drawAtPoint:NSMakePoint(22,19) withAttributes:@{NSFontAttributeName:[NSFont boldSystemFontOfSize:32], NSForegroundColorAttributeName:NSColor.whiteColor}];
     }
     if (self.busy) {
-        CGFloat angle = self.animationTimer ? fmod(NSProcessInfo.processInfo.systemUptime,1.2)*300.0 : 0;
-        NSBezierPath *arc = [NSBezierPath bezierPath];
-        [arc appendBezierPathWithArcWithCenter:NSMakePoint(NSMidX(self.bounds),NSMidY(self.bounds))
-                                      radius:NSWidth(self.bounds)/2-3 startAngle:angle endAngle:angle+260];
-        arc.lineWidth = 3;
-        [NSColor.systemBlueColor setStroke];
-        [arc stroke];
+        for (int index=0;index<3;++index) {
+            CGFloat alpha = self.animationTimer ? 0.35+0.65*(sin(NSProcessInfo.processInfo.systemUptime*4-index)+1)/2 : 0.7;
+            [[NSColor.systemBlueColor colorWithAlphaComponent:alpha] setFill];
+            [[NSBezierPath bezierPathWithOvalInRect:NSMakeRect(NSMidX(self.bounds)-19+index*14,4,8,8)] fill];
+        }
     }
 }
 - (void)dealloc { [self.animationTimer invalidate]; }
@@ -237,7 +258,8 @@ willPerformHTTPRedirection:(NSHTTPURLResponse *)response
 @property(nonatomic, strong) NSSecureTextField *password;
 @property(nonatomic, strong) NSTextField *status;
 @property(nonatomic, strong) NSButton *submit;
-@property(nonatomic, strong) NSButton *logout;
+@property(nonatomic, strong) NSButton *retry;
+@property(nonatomic, strong) NSButton *webLogin;
 @property(nonatomic, strong) NSButton *remember;
 @property(nonatomic, strong) NSDate *lastWebLogin;
 @property(nonatomic, strong) NSURLSession *webSession;
@@ -263,7 +285,7 @@ willPerformHTTPRedirection:(NSHTTPURLResponse *)response
 @property(nonatomic, strong) NSTextField *accountPanelEmail;
 @property(nonatomic, strong) NSTextField *accountPanelMembership;
 @property(nonatomic, strong) NSTextField *accountPanelAuthorization;
-@property(nonatomic) BOOL notifyAuthorization;
+@property(nonatomic, strong) NSDictionary *deferredSession;
 @property(nonatomic, strong) NSButton *accountPanelUpgrade;
 @property(nonatomic, strong) NSButton *accountPanelLogout;
 @property(nonatomic, weak) NSWindow *accountHostWindow;
@@ -287,6 +309,7 @@ willPerformHTTPRedirection:(NSHTTPURLResponse *)response
 - (void)pollWebLogin:(id)sender;
 - (void)cancelWebLogin;
 - (void)deferLogin:(id)sender;
+- (void)retryConnection:(id)sender;
 - (void)postAccountChange;
 - (void)authorizationChanged:(NSNotification *)note;
 @end
@@ -313,6 +336,8 @@ static NSTextField *AccountLabel(NSView *view, NSString *text, NSRect frame) {
 }
 
 - (void)startSession {
+    if (self.restoringSession || self.session) return;
+    self.deferredSession = nil;
     NSDictionary *saved = MbsLoadSession();
     NSString *token = [saved[@"token"] isKindOfClass:NSString.class] ? saved[@"token"] : nil;
     NSString *email = [saved[@"email"] isKindOfClass:NSString.class] ? saved[@"email"] : nil;
@@ -344,12 +369,19 @@ static NSTextField *AccountLabel(NSView *view, NSString *text, NSRect frame) {
             [NormalizedEmail(user[@"email"]) isEqualToString:NormalizedEmail(email)]) {
             [self didSignInWithToken:token user:user notify:NO];
         } else {
-            if (code == 401) {
+            BOOL expired = code == 401 || code == 403;
+            BOOL unavailable = error || code >= 500 || code == 408 || code == 429;
+            if (expired) {
                 MbsResetEditorLicense();
                 MbsDeleteSession();
-                [self show];
+            } else if (unavailable && MbsCanRestoreAccountSession(token.UTF8String,email.UTF8String)) {
+                self.deferredSession = saved;
             }
-            self.status.stringValue = code == 401 ? @"登录状态已过期，请重新输入密码。" : @"无法验证登录状态，请检查网络后重新登录。文档仍可离线编辑。";
+            [self show];
+            self.retry.hidden = expired;
+            self.webLogin.hidden = !self.retry.hidden;
+            self.status.stringValue = expired ? @"登录状态已过期，请重新输入密码。" :
+                (self.deferredSession ? @"连接暂时不可用。点击“稍后登录”可保留有效的 Mbs 账号授权，恢复联网后会重新验证。" : @"连接暂时不可用，请重试。当前没有可恢复的 Mbs 账号授权。");
         }
         [self setBusy:NO];
         [self.session finishTasksAndInvalidate];
@@ -361,7 +393,9 @@ static NSTextField *AccountLabel(NSView *view, NSString *text, NSRect frame) {
     [self cancelWebLogin];
     self.sessionToken = token;
     self.sessionEmail = user[@"email"];
-    self.notifyAuthorization = notify;
+    self.deferredSession = nil;
+    self.retry.hidden = YES;
+    self.webLogin.hidden = NO;
     MbsRequestEditorLicense(token.UTF8String,self.sessionEmail.UTF8String);
     self.password.stringValue = @"";
     self.status.stringValue = [NSString stringWithFormat:@"已登录：%@", self.sessionEmail];
@@ -378,6 +412,7 @@ static NSTextField *AccountLabel(NSView *view, NSString *text, NSRect frame) {
                                                         userInfo:nil repeats:YES];
     [self postAccountChange];
     [self refreshMembership:YES];
+    if (notify) [self showStatusPanel];
 }
 
 - (void)hideStatusPanel {
@@ -571,11 +606,6 @@ static NSTextField *AccountLabel(NSView *view, NSString *text, NSRect frame) {
 - (void)authorizationChanged:(NSNotification *)note {
     if (!self.sessionEmail.length) return;
     self.accountPanelAuthorization.stringValue = note.userInfo[@"status"] ?: @"授权状态待验证";
-    if (self.notifyAuthorization && [note.userInfo[@"nativeAccepted"] boolValue]) {
-        self.notifyAuthorization = NO;
-        [self showStatusPanel];
-        self.statusLabel.stringValue = @"Mbs 在线授权验证成功";
-    }
 }
 
 - (void)refreshMembership:(BOOL)force {
@@ -619,7 +649,7 @@ static NSTextField *AccountLabel(NSView *view, NSString *text, NSRect frame) {
                 strongSelf.dailyFreeLimit = [limitValue integerValue];
             }
             strongSelf.membershipLabel = known ? (label ?: (strongSelf.vip ? @"VIP 会员" : @"普通账号")) : @"会员状态待同步";
-        } else if (statusCode == 401) {
+        } else if (statusCode == 401 || statusCode == 403) {
             MbsResetEditorLicense();
             MbsDeleteSession();
             strongSelf.sessionToken = nil;
@@ -689,7 +719,7 @@ static NSTextField *AccountLabel(NSView *view, NSString *text, NSRect frame) {
 
 - (void)prepareWindow {
     if (!self.window) {
-        self.window = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 570, 440)
+        self.window = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 800, 500)
                                                    styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskMiniaturizable
                                                      backing:NSBackingStoreBuffered
                                                        defer:NO];
@@ -701,59 +731,73 @@ static NSTextField *AccountLabel(NSView *view, NSString *text, NSRect frame) {
         [self.window center];
 
         NSView *view = self.window.contentView;
-        self.logo = [[MbsAccountLogo alloc] initWithFrame:NSMakeRect(24,344,72,72)];
-        [view addSubview:self.logo];
-        AccountLabel(view, @"Mbs Office 在线登录", NSMakeRect(112,396,434,24));
-        AccountLabel(view, @"登录后同步账号与授权状态，注册将在网页完成。", NSMakeRect(112,350,434,42));
+        MbsAccountBackdrop *backdrop = [[MbsAccountBackdrop alloc] initWithFrame:NSMakeRect(0,0,310,500)];
+        [view addSubview:backdrop];
+        NSTextField *brand = AccountLabel(backdrop, @"Mbs Office", NSMakeRect(30,425,250,36));
+        brand.font = [NSFont boldSystemFontOfSize:28];
+        brand.textColor = [NSColor colorWithSRGBRed:0.15 green:0.21 blue:0.4 alpha:1];
+        NSTextField *tagline = AccountLabel(backdrop, @"让灵感连接每一份文档", NSMakeRect(30,392,250,26));
+        tagline.textColor = NSColor.secondaryLabelColor;
+        self.logo = [[MbsAccountLogo alloc] initWithFrame:NSMakeRect(15,112,280,280)];
+        [backdrop addSubview:self.logo];
+        NSTextField *caption = AccountLabel(backdrop, @"文字 · 表格 · 演示 · AI 助手", NSMakeRect(24,62,262,24));
+        caption.alignment = NSTextAlignmentCenter;
+        caption.font = [NSFont systemFontOfSize:13];
+        caption.textColor = [NSColor colorWithSRGBRed:0.32 green:0.37 blue:0.55 alpha:1];
 
+        NSView *form = [[NSView alloc] initWithFrame:NSMakeRect(350,0,410,500)];
+        [view addSubview:form];
+        NSTextField *title = AccountLabel(form, @"欢迎回来", NSMakeRect(0,435,410,34));
+        title.font = [NSFont boldSystemFontOfSize:25];
+        NSTextField *subtitle = AccountLabel(form, @"登录 Mbs 账号，同步你的个人工作空间。", NSMakeRect(0,398,410,28));
+        subtitle.textColor = NSColor.secondaryLabelColor;
+        subtitle.font = [NSFont systemFontOfSize:13];
         self.mode = [NSSegmentedControl segmentedControlWithLabels:@[@"登录", @"注册"]
                                                        trackingMode:NSSegmentSwitchTrackingSelectOne
-                                                             target:self
-                                                             action:@selector(changeMode:)];
-        self.mode.frame = NSMakeRect(24, 309, 522, 30);
+                                                             target:self action:@selector(changeMode:)];
+        self.mode.frame = NSMakeRect(0,350,410,30);
         self.mode.selectedSegment = 0;
-        [view addSubview:self.mode];
+        [form addSubview:self.mode];
 
-        AccountLabel(view, @"邮箱", NSMakeRect(24, 269, 90, 24));
-        self.email = [[NSTextField alloc] initWithFrame:NSMakeRect(121, 265, 425, 28)];
+        AccountLabel(form, @"邮箱", NSMakeRect(0,317,410,22));
+        self.email = [[NSTextField alloc] initWithFrame:NSMakeRect(0,282,410,30)];
         self.email.placeholderString = @"name@example.com";
-        [view addSubview:self.email];
-
-        AccountLabel(view, @"密码", NSMakeRect(24, 226, 90, 24));
-        self.password = [[NSSecureTextField alloc] initWithFrame:NSMakeRect(121, 222, 425, 28)];
+        self.email.font = [NSFont systemFontOfSize:15];
+        [form addSubview:self.email];
+        AccountLabel(form, @"密码", NSMakeRect(0,246,410,22));
+        self.password = [[NSSecureTextField alloc] initWithFrame:NSMakeRect(0,211,410,30)];
         self.password.placeholderString = @"至少 8 个字符";
-        [view addSubview:self.password];
-
+        self.password.font = [NSFont systemFontOfSize:15];
+        [form addSubview:self.password];
         self.remember = [NSButton checkboxWithTitle:@"保持登录状态（30 天）" target:nil action:nil];
-        self.remember.frame = NSMakeRect(121, 182, 180, 24);
+        self.remember.frame = NSMakeRect(0,173,240,24);
         self.remember.state = NSControlStateValueOn;
-        [view addSubview:self.remember];
-
-        AccountLabel(view, @"仅保存登录会话，不保存密码。", NSMakeRect(121, 155, 425, 24));
-
-        self.status = AccountLabel(view, @"未登录。登录只连接 Mbs Office 账号服务。", NSMakeRect(24, 75, 522, 67));
+        [form addSubview:self.remember];
+        NSTextField *privacy = AccountLabel(form, @"保存安全会话，不保存账号密码。", NSMakeRect(0,148,410,22));
+        privacy.font = [NSFont systemFontOfSize:12];
+        privacy.textColor = NSColor.secondaryLabelColor;
+        self.status = AccountLabel(form, @"", NSMakeRect(0,82,410,58));
+        self.status.font = [NSFont systemFontOfSize:13];
+        self.status.textColor = NSColor.secondaryLabelColor;
 
         self.submit = [NSButton buttonWithTitle:@"登录" target:self action:@selector(submit:)];
-        self.submit.frame = NSMakeRect(422, 24, 124, 32);
+        self.submit.frame = NSMakeRect(280,28,130,34);
         self.submit.bezelStyle = NSBezelStyleRounded;
-        [view addSubview:self.submit];
-
-        NSButton *webLogin = [NSButton buttonWithTitle:@"网页登录" target:self action:@selector(openWebLogin:)];
-        webLogin.frame = NSMakeRect(152, 24, 112, 32);
-        webLogin.bezelStyle = NSBezelStyleRounded;
-        [view addSubview:webLogin];
-
-        NSButton *later = [NSButton buttonWithTitle:@"稍后登录" target:self action:@selector(deferLogin:)];
-        later.frame = NSMakeRect(282, 24, 124, 32);
-        later.bezelStyle = NSBezelStyleRounded;
-        [view addSubview:later];
         self.submit.keyEquivalent = @"\r";
-
-        self.logout = [NSButton buttonWithTitle:@"退出登录" target:self action:@selector(logout:)];
-        self.logout.frame = NSMakeRect(24, 24, 124, 32);
-        self.logout.bezelStyle = NSBezelStyleRounded;
-        self.logout.enabled = self.sessionEmail.length > 0;
-        [view addSubview:self.logout];
+        [form addSubview:self.submit];
+        self.webLogin = [NSButton buttonWithTitle:@"网页登录" target:self action:@selector(openWebLogin:)];
+        self.webLogin.frame = NSMakeRect(133,28,130,34);
+        self.webLogin.bezelStyle = NSBezelStyleRounded;
+        [form addSubview:self.webLogin];
+        self.retry = [NSButton buttonWithTitle:@"重试连接" target:self action:@selector(retryConnection:)];
+        self.retry.frame = self.webLogin.frame;
+        self.retry.bezelStyle = NSBezelStyleRounded;
+        self.retry.hidden = YES;
+        [form addSubview:self.retry];
+        NSButton *later = [NSButton buttonWithTitle:@"稍后登录" target:self action:@selector(deferLogin:)];
+        later.frame = NSMakeRect(0,28,116,34);
+        later.bezelStyle = NSBezelStyleRounded;
+        [form addSubview:later];
         [self changeMode:nil];
     }
 }
@@ -896,8 +940,22 @@ static NSTextField *AccountLabel(NSView *view, NSString *text, NSRect frame) {
 - (void)deferLogin:(id)sender {
     [self cancelWebLogin];
     self.password.stringValue = @"";
+    NSString *token = self.deferredSession[@"token"], *email = self.deferredSession[@"email"];
+    if (MbsCanRestoreAccountSession(token.UTF8String,email.UTF8String)) {
+        self.sessionToken = token;
+        self.sessionEmail = email;
+        self.membershipLabel = @"已验证的 Mbs 账号 · 待联网同步";
+        [self.membershipTimer invalidate];
+        self.membershipTimer = [NSTimer scheduledTimerWithTimeInterval:60 target:self
+            selector:@selector(membershipTimerFired:) userInfo:nil repeats:YES];
+        [self postAccountChange];
+        MbsRequestEditorLicense(token.UTF8String,email.UTF8String);
+    }
+    self.deferredSession = nil;
     [self.window orderOut:nil];
 }
+
+- (void)retryConnection:(id)sender { [self startSession]; }
 
 - (void)windowWillClose:(NSNotification *)notification {
     if (notification.object == self.window) [self cancelWebLogin];
@@ -909,8 +967,9 @@ static NSTextField *AccountLabel(NSView *view, NSString *text, NSRect frame) {
     self.mode.enabled = !busy;
     self.email.enabled = !busy;
     self.password.enabled = !busy;
-    self.logout.enabled = !busy && self.sessionEmail.length > 0;
     self.remember.enabled = !busy;
+    self.retry.enabled = !busy;
+    self.webLogin.enabled = !busy;
 }
 
 - (void)submit:(id)sender {
@@ -1010,7 +1069,7 @@ static NSTextField *AccountLabel(NSView *view, NSString *text, NSRect frame) {
 }
 
 - (void)logout:(id)sender {
-    self.notifyAuthorization = NO;
+    self.deferredSession = nil;
     MbsResetEditorLicense();
     [self cancelWebLogin];
     MbsDeleteSession();
@@ -1027,7 +1086,6 @@ static NSTextField *AccountLabel(NSView *view, NSString *text, NSRect frame) {
     self.status.stringValue = @"已退出登录。";
     [self hideStatusPanel];
     [self hideAccountPopover];
-    self.logout.enabled = NO;
     [self postAccountChange];
 
     if (!token.length) return;
