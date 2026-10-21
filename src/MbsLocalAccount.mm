@@ -4,10 +4,9 @@
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <unistd.h>
-#include <dlfcn.h>
-#include <mach-o/getsect.h>
 #import "MbsLocalAccount.h"
 #import "MbsEditorAuthorization.h"
+#import "MbsBrandAppearance.h"
 
 static NSString *MbsLoginURLString = @"https://ttys.ddxmu.com/api/mbs/login";
 static NSString *MbsLogoutURLString = @"https://ttys.ddxmu.com/api/mbs/logout";
@@ -198,14 +197,6 @@ willPerformHTTPRedirection:(NSHTTPURLResponse *)response
 }
 @end
 
-static NSImage *MbsEmbeddedAccountArtwork(void) {
-    Dl_info image;
-    if (!dladdr((const void *)MbsEmbeddedAccountArtwork,&image)) return nil;
-    unsigned long size = 0;
-    const unsigned char *bytes = getsectiondata((const struct mach_header_64 *)image.dli_fbase,"__TEXT","__mbs_art",&size);
-    return bytes && size ? [[NSImage alloc] initWithData:[NSData dataWithBytes:bytes length:size]] : nil;
-}
-
 @interface MbsAccountLogo : NSView
 @property(nonatomic) BOOL busy;
 @property(nonatomic, strong) NSTimer *animationTimer;
@@ -215,8 +206,7 @@ static NSImage *MbsEmbeddedAccountArtwork(void) {
 @implementation MbsAccountLogo
 - (instancetype)initWithFrame:(NSRect)frame {
     if ((self = [super initWithFrame:frame])) {
-        NSString *path = [NSBundle.mainBundle pathForResource:@"MbsStartupAI" ofType:@"png"];
-        self.image = path ? [[NSImage alloc] initWithContentsOfFile:path] : MbsEmbeddedAccountArtwork();
+        self.image = MbsBrandArtwork();
         if (!self.image) self.image = [[NSImage alloc] initWithContentsOfFile:[NSBundle.mainBundle pathForResource:@"MbsOffice" ofType:@"icns"]];
         self.accessibilityElement = YES;
         self.accessibilityLabel = @"Mbs Office";
@@ -239,7 +229,8 @@ static NSImage *MbsEmbeddedAccountArtwork(void) {
 - (void)drawRect:(NSRect)dirtyRect {
     NSRect icon = NSInsetRect(self.bounds,12,12);
     if (self.busy && self.animationTimer) icon.origin.y += sin(NSProcessInfo.processInfo.systemUptime*2)*4;
-    if (self.image) [self.image drawInRect:icon];
+    if (self.image && self.image == MbsBrandArtwork()) MbsDrawBrandRobot(icon);
+    else if (self.image) [self.image drawInRect:icon];
     else {
         [NSColor.systemBlueColor setFill];
         [[NSBezierPath bezierPathWithRoundedRect:icon xRadius:12 yRadius:12] fill];
@@ -829,8 +820,8 @@ static NSTextField *AccountLabel(NSView *view, NSString *text, NSRect frame) {
         MbsAccountBackdrop *backdrop = [[MbsAccountBackdrop alloc] initWithFrame:NSMakeRect(0,0,310,500)];
         [view addSubview:backdrop];
         NSTextField *brand = AccountLabel(backdrop, @"Mbs Office", NSMakeRect(30,425,250,36));
-        brand.font = [NSFont boldSystemFontOfSize:28];
-        brand.textColor = [NSColor colorWithSRGBRed:0.15 green:0.21 blue:0.4 alpha:1];
+        brand.font = MbsBrandFont(29);
+        brand.textColor = MbsBrandInk();
         NSTextField *tagline = AccountLabel(backdrop, @"让灵感连接每一份文档", NSMakeRect(30,392,250,26));
         tagline.textColor = NSColor.secondaryLabelColor;
         self.logo = [[MbsAccountLogo alloc] initWithFrame:NSMakeRect(15,112,280,280)];

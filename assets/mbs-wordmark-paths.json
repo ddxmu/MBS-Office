@@ -1,0 +1,19 @@
+{
+  "paths": [
+    "/brandlogo/icons/logo_wps365.svg",
+    "/icons_svg/other/logo_wps2019.svg",
+    "/icons_svg/other/logo_wps365.svg",
+    "/icons_svg/other/logo_wpsbeta.svg",
+    "/icons_svg/other/logo_wpsedu.svg"
+  ],
+  "nameHashes": {
+    "brandlogo": 139192031,
+    "icons": 7317075,
+    "icons_svg": 106542471,
+    "logo_wps2019.svg": 160195047,
+    "logo_wps365.svg": 171727207,
+    "logo_wpsbeta.svg": 107249223,
+    "logo_wpsedu.svg": 119298183,
+    "other": 7777986
+  }
+}

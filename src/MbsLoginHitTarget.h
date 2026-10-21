@@ -1,8 +1,9 @@
 #pragma once
 #import <AppKit/AppKit.h>
+#import "MbsAccountEntry.h"
 
 // Read fresh AX frames for this click; never retain native widget pointers.
-static NSArray<NSValue *> *MbsLoginButtonFrames(id root, NSRect windowFrame) {
+static NSArray<NSValue *> *MbsLoginButtonFrames(id root, NSRect windowFrame, BOOL headerOnly=NO) {
     NSMutableArray *pending = [NSMutableArray arrayWithObject:root];
     NSMutableArray *frames = [NSMutableArray array];
     for (NSUInteger count=0; pending.count && count<256; ++count) {
@@ -13,7 +14,7 @@ static NSArray<NSValue *> *MbsLoginButtonFrames(id root, NSRect windowFrame) {
         if (!title.length && [item respondsToSelector:@selector(accessibilityTitle)]) title = [item accessibilityTitle];
         NSString *label = MbsNativeAccessibilityValue(item,NSAccessibilityDescriptionAttribute);
         if (!label.length && [item respondsToSelector:@selector(accessibilityLabel)]) label = [item accessibilityLabel];
-        BOOL login = [title isEqualToString:@"立即登录"] || [label isEqualToString:@"立即登录"];
+        BOOL login = MbsIsAccountEntryText(title) || MbsIsAccountEntryText(label);
         NSNumber *enabled = MbsNativeAccessibilityValue(item,NSAccessibilityEnabledAttribute);
         BOOL isEnabled = [enabled isKindOfClass:NSNumber.class] ? enabled.boolValue :
             (![item respondsToSelector:@selector(isAccessibilityEnabled)] || [item isAccessibilityEnabled]);
@@ -26,7 +27,8 @@ static NSArray<NSValue *> *MbsLoginButtonFrames(id root, NSRect windowFrame) {
                     frame = NSMakeRect(position.pointValue.x,position.pointValue.y,size.sizeValue.width,size.sizeValue.height);
             }
             if (frame.size.width>=20 && frame.size.width<=220 && frame.size.height>=12 && frame.size.height<=64 &&
-                NSContainsRect(windowFrame,frame)) [frames addObject:[NSValue valueWithRect:frame]];
+                NSContainsRect(windowFrame,frame) && (!headerOnly || NSMinY(frame)>=NSMaxY(windowFrame)-120))
+                [frames addObject:[NSValue valueWithRect:frame]];
         }
         NSArray *children = MbsNativeAccessibilityValue(item,NSAccessibilityChildrenAttribute);
         if (!children.count && [item respondsToSelector:@selector(accessibilityChildren)]) children = [item accessibilityChildren];

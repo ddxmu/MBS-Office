@@ -2,6 +2,7 @@
 #import <objc/runtime.h>
 #import "MbsNativeLoginRecovery.h"
 #import "MbsLocalAccount.h"
+#import "MbsAccountEntry.h"
 
 static NSMutableDictionary<NSString *,NSValue *> *MbsLoginActions;
 static BOOL MbsIsLoginActionTarget(id item) {
@@ -15,7 +16,7 @@ static BOOL MbsIsLoginActionTarget(id item) {
     BOOL active = [enabled isKindOfClass:NSNumber.class] ? enabled.boolValue :
         (![item respondsToSelector:@selector(isAccessibilityEnabled)] || [item isAccessibilityEnabled]);
     return [role isEqualToString:NSAccessibilityButtonRole] && active &&
-        ([title isEqualToString:@"立即登录"] || [label isEqualToString:@"立即登录"]);
+        (MbsIsAccountEntryText(title) || MbsIsAccountEntryText(label));
 }
 static NSString *MbsLoginActionKey(Class type, SEL selector) {
     return [NSStringFromClass(type) stringByAppendingFormat:@"/%@",NSStringFromSelector(selector)];
@@ -29,13 +30,13 @@ static IMP MbsOriginalLoginAction(id item, SEL selector) {
 }
 static void MbsPerformLoginAction(id item, SEL selector, NSString *action) {
     if ([action isEqualToString:NSAccessibilityPressAction] && MbsIsLoginActionTarget(item)) {
-        MbsShowLoginForm(); return;
+        MbsOpenAccountEntry(); return;
     }
     IMP original = MbsOriginalLoginAction(item,selector);
     if (original) ((void (*)(id,SEL,id))original)(item,selector,action);
 }
 static BOOL MbsPerformLoginPress(id item, SEL selector) {
-    if (MbsIsLoginActionTarget(item)) { MbsShowLoginForm(); return YES; }
+    if (MbsIsLoginActionTarget(item)) { MbsOpenAccountEntry(); return YES; }
     IMP original = MbsOriginalLoginAction(item,selector);
     return original ? ((BOOL (*)(id,SEL))original)(item,selector) : NO;
 }
@@ -57,7 +58,7 @@ static void MbsRegisterLoginActions(Class type) {
 }
 static void MbsFindLoginActions(NSWindow *window) {
     static BOOL finding;
-    if (finding || ![window.title isEqualToString:@"首页"]) return;
+    if (finding || !window.isVisible || !window.contentView) return;
     finding = YES;
     NSMutableArray *pending = [NSMutableArray arrayWithObject:window];
     for (NSUInteger count=0;pending.count && count<256;++count) {

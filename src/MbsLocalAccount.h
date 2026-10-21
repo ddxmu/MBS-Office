@@ -13,7 +13,7 @@ const char *MbsLocalAccountCapabilities(void);
 // Caller owns this UTF-8 JSON buffer and must free() it. No password is returned.
 char *MbsCopyLocalAccountState(void);
 void MbsLocalAccountSignOut(void);
-// Returns the current signed-in email for native header/status updates.
+// Returns a copied current signed-in email, or NULL. Caller must free() it.
 const char *MbsCurrentAccountEmail(void);
 // Updates the account hover card from the editor's small account hit area.
 // The window pointer is borrowed and is only used during the call.

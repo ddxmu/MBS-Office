@@ -1,5 +1,9 @@
 #import "../src/MbsNativeLoginRecovery.h"
 #import "../src/MbsLoginHitTarget.h"
+static NSString *signedInEmail;
+const char *MbsCurrentAccountEmail(void) { return signedInEmail.length ? strdup(signedInEmail.UTF8String) : NULL; }
+void MbsShowLoginForm(void) {}
+void MbsShowLocalAccount(void) {}
 
 @interface LoginNode : NSObject
 @property NSString *accessibilityRole;
@@ -45,6 +49,16 @@ int main() { @autoreleasepool {
         outsideHit |= NSPointInRect(NSMakePoint(449,335),value.rectValue);
     }
     assert(centerHit && topHit && !outsideHit);
+    NSArray<NSValue *> *headerFrames=MbsLoginButtonFrames(root,window,YES);
+    assert(headerFrames.count==1 && NSEqualRects(headerFrames[0].rectValue,top.accessibilityFrame));
+    signedInEmail=@"ui-check@example.invalid";
+    top.accessibilityTitle=@"ui-check"; center.accessibilityTitle=@"ui-check";
+    frames=MbsLoginButtonFrames(root,window);
+    assert(frames.count==2);
+    assert(MbsLoginButtonFrames(root,window,YES).count==1);
+    signedInEmail=nil;
+    frames=MbsLoginButtonFrames(root,window);
+    assert(frames.count==0);
     root.accessibilityChildren = @[[LegacyLoginNode new]];
     frames = MbsLoginButtonFrames(root,window);
     assert(frames.count == 1 && NSPointInRect(NSMakePoint(480,335),frames[0].rectValue));

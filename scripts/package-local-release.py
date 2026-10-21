@@ -34,6 +34,7 @@ outer['CFBundleShortVersionString'] = version
 outer['CFBundleVersion'] = str(int(outer['CFBundleVersion'])+1)
 (app/'Contents/Info.plist').write_bytes(plistlib.dumps(outer))
 engine = app/'Contents/Resources/MbsEngine.app'
+subprocess.run(['python3',str(repo/'scripts/refresh-branding.py'),str(app)],check=True)
 inner = plistlib.loads((engine/'Contents/Info.plist').read_bytes())
 inner['MbsModuleVersion'] = version
 (engine/'Contents/Info.plist').write_bytes(plistlib.dumps(inner))

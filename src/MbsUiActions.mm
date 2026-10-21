@@ -1,10 +1,12 @@
 #import <AppKit/AppKit.h>
 #import <objc/runtime.h>
 #import "MbsLocalAccount.h"
+#import "MbsAccountEntry.h"
 #import "MbsUpdates.h"
 #import "MbsNativeLoginRecovery.h"
 #import "MbsLoginHitTarget.h"
 #include <string.h>
+#include <dlfcn.h>
 
 namespace kso_qt {
 class __attribute__((visibility("hidden"))) QString {
@@ -14,15 +16,30 @@ public: const void *data;
 };
 class __attribute__((visibility("hidden"))) QVariant {
 public: alignas(8) unsigned char data[16];
+    __attribute__((visibility("default"))) QVariant(bool);
     __attribute__((visibility("default"))) ~QVariant();
     __attribute__((visibility("default"))) QString toString() const;
+    __attribute__((visibility("default"))) int toInt(bool * = nullptr) const;
 };
-class QObject { public: QVariant property(const char*)const; };
+class QObject { public: QVariant property(const char*)const; bool setProperty(const char*,const QVariant&); };
+class QWidget : public QObject { public:
+    void setToolTip(const QString &); void setAccessibleName(const QString &);
+    void updateGeometry(); void setVisible(bool); void show();
+};
+struct WidgetListData { int ref,allocation,begin,end; QWidget *items[1]; };
+void disposeWidgetList(WidgetListData *) __asm__("__ZN6kso_qt9QListData7disposeEPNS0_4DataE");
+class __attribute__((visibility("hidden"))) WidgetList {
+public: WidgetListData *data;
+    ~WidgetList() {
+        if (data && data->ref!=-1 && __atomic_sub_fetch(&data->ref,1,__ATOMIC_ACQ_REL)==0) disposeWidgetList(data);
+    }
+};
+class QApplication { public: static WidgetList allWidgets(); };
 class QEvent;
-class QMetaObject { public: const char *className()const; };
+class QMetaObject { public: const char *className()const; QObject *cast(QObject *)const; };
 class QCoreApplication { public: static bool notifyInternal2(QObject*,QEvent*); };
-class QLabel { public: void setText(const QString&); };
-class QAbstractButton { public: void setText(const QString&); };
+class QLabel { public: static const QMetaObject staticMetaObject; void setText(const QString&); };
+class QAbstractButton { public: static const QMetaObject staticMetaObject; void setText(const QString&); };
 class QMouseEvent;
 }
 class KLiteClickableLabel;
@@ -31,6 +48,12 @@ class KPromeHeaderAuthTip;
 class KAppEntryWidget;
 void labelSetText(void*,const kso_qt::QString&) __asm__("__ZN6kso_qt6QLabel7setTextERKNS_7QStringE");
 void buttonSetText(void*,const kso_qt::QString&) __asm__("__ZN6kso_qt15QAbstractButton7setTextERKNS_7QStringE");
+void widgetSetVisibleOriginal(kso_qt::QWidget *,bool) __asm__("__ZN6kso_qt7QWidget10setVisibleEb");
+void widgetShowOriginal(kso_qt::QWidget *) __asm__("__ZN6kso_qt7QWidget4showEv");
+struct MbsQtPoint { int x,y; };
+MbsQtPoint widgetMapToGlobal(const kso_qt::QWidget *,const MbsQtPoint &) __asm__("__ZNK6kso_qt7QWidget11mapToGlobalERKNS_6QPointE");
+void nativeColorCtor(void *,unsigned) __asm__("__ZN6kso_qt6QColorC1Ej");
+void nativeDrawTextOriginal(void *,const void *,const kso_qt::QString &,int,const void *,const kso_qt::QString &,const void *,int,const kso_qt::QString &,const void *,const void *,const double &,int) __asm__("__ZN11KDrawHelper8drawTextEPN6kso_qt8QPainterERKNS0_5QRectERKNS0_7QStringEiRKNS0_5QFontES8_PKNS0_12QStyleOptionENS0_2Qt13TextElideModeES8_RKNS_18KDrawTextColorArgsERKNS0_6QColorERKdi");
 void buttonMouseReleaseOriginal(kso_qt::QAbstractButton*,kso_qt::QMouseEvent*) __asm__("__ZN6kso_qt15QAbstractButton17mouseReleaseEventEPNS_11QMouseEventE");
 void clickableLabelMouseReleaseOriginal(void*,kso_qt::QMouseEvent*) __asm__("__ZN19KLiteClickableLabel17mouseReleaseEventEPN6kso_qt11QMouseEventE");
 void headerAvatarMouseReleaseOriginal(void*,kso_qt::QMouseEvent*) __asm__("__ZN18KPromeHeaderAvatar17mouseReleaseEventEPN6kso_qt11QMouseEventE");
@@ -50,6 +73,18 @@ static NSString *read(const kso_qt::QString &value) {
     const auto *d=(const Data*)value.data;
     if(!d||d->len<0)return @"";
     return [[NSString alloc] initWithCharacters:(const unichar*)((const char*)d+d->offset) length:d->len];
+}
+static const void *MbsNativeAccountTextColor(const void *option,const kso_qt::QString &text,const void *color,void *blue) {
+    // The bundled KPromeHeaderAvatar constructs QStyleOptionComplex(1,
+    // 0x08000f04). Restrict the color override to that header's account text.
+    int type=0; if (option) memcpy(&type,(const char *)option+sizeof(int),sizeof(type));
+    if (type!=0x08000f04 || !MbsIsAccountEntryText(read(text))) return color;
+    nativeColorCtor(blue,0xff006ce7); return blue;
+}
+static void nativeDrawAccountText(void *painter,const void *rect,const kso_qt::QString &text,int flags,const void *font,const kso_qt::QString &theme,const void *option,int elide,const kso_qt::QString &state,const void *colorArgs,const void *color,const double &opacity,int mode) {
+    alignas(8) unsigned char blue[32];
+    color=MbsNativeAccountTextColor(option,text,color,blue);
+    nativeDrawTextOriginal(painter,rect,text,flags,font,theme,option,elide,state,colorArgs,color,opacity,mode);
 }
 static kso_qt::QString literal(NSString *value) {
     static NSMutableDictionary<NSString*,NSValue*>*cache;static dispatch_once_t once;
@@ -115,12 +150,17 @@ static void InstallMbsWorkspaceURLHook(void) {
         }
     });
 }
+static NSString *accountText(kso_qt::QObject *object,NSString *text) {
+    if (![text isEqualToString:@"立即登录"]) return text;
+    object->setProperty("mbsAccountEntry",kso_qt::QVariant(true));
+    return MbsAccountEntryTitle();
+}
 static void labelText(kso_qt::QLabel*label,const kso_qt::QString&text) {
-    NSString *value=read(text),*replacement=updated(value);
+    NSString *value=read(text),*replacement=accountText((kso_qt::QObject *)label,updated(value));
     if(![value isEqualToString:replacement])label->setText(literal(replacement));else label->setText(text);
 }
 static void buttonText(kso_qt::QAbstractButton*button,const kso_qt::QString&text) {
-    NSString *value=read(text),*replacement=updated(value);
+    NSString *value=read(text),*replacement=accountText((kso_qt::QObject *)button,updated(value));
     if(![value isEqualToString:replacement])button->setText(literal(replacement));else button->setText(text);
 }
 static NSString *property(kso_qt::QObject*object,const char*key) {
@@ -136,15 +176,105 @@ static NSString *className(kso_qt::QObject*object) {
     const char *name=meta?meta->className():nullptr;
     return name?[NSString stringWithUTF8String:name]:@"";
 }
+static BOOL MbsIsLegacyAccountPanel(NSString *name) {
+    return [name isEqualToString:@"KPromeAccountPanelWidget"] ||
+        [name isEqualToString:@"KPromeAccountPanelKeletonWidgetV2"];
+}
+static void widgetSetVisible(kso_qt::QWidget *widget,bool visible) {
+    widget->setVisible(visible && !MbsIsLegacyAccountPanel(className(widget)));
+}
+static void widgetShow(kso_qt::QWidget *widget) {
+    if (!MbsIsLegacyAccountPanel(className(widget))) widget->show();
+}
+static void MbsRefreshNativeAvatar(kso_qt::QWidget *widget,NSString *title,NSString *email) {
+    // These native header APIs only update its painted name and layout;
+    // account validity continues to come from the Mbs session.
+    auto setName=(void (*)(void *,const kso_qt::QString &))dlsym(RTLD_DEFAULT,"_ZN18KPromeHeaderAvatar16setLoginUserNameERKN6kso_qt7QStringE");
+    auto showText=(void (*)(void *,bool))dlsym(RTLD_DEFAULT,"_ZN18KPromeHeaderAvatar14setTextVisibleEb");
+    if (!setName || !showText) return;
+    setName(widget,literal(title)); showText(widget,true);
+    widget->setProperty("mbsAccountEntry",kso_qt::QVariant(true));
+    widget->setAccessibleName(literal(title));
+    widget->setToolTip(literal(email)); widget->updateGeometry();
+}
+
+static void MbsRefreshAccountEntries(void) {
+    static BOOL updating;
+    if (updating) return;
+    updating=YES;
+    NSString *title=MbsAccountEntryTitle(),*email=MbsAccountEntryEmail();
+    auto widgets=kso_qt::QApplication::allWidgets();
+    auto *list=widgets.data;
+    for (int index=list->begin;index<list->end;++index) {
+        auto *widget=list->items[index];
+        NSString *kind=className(widget);
+        if (MbsIsLegacyAccountPanel(kind)) { widget->setVisible(false); continue; }
+        if ([kind isEqualToString:@"KPromeHeaderAvatar"]) {
+            MbsRefreshNativeAvatar(widget,title,email); continue;
+        }
+        BOOL button=kso_qt::QAbstractButton::staticMetaObject.cast(widget)!=nullptr;
+        BOOL label=!button && kso_qt::QLabel::staticMetaObject.cast(widget)!=nullptr;
+        if (!button && !label) continue;
+        NSString *text=property(widget,"text");
+        if (![text isEqualToString:@"立即登录"] && ![property(widget,"mbsAccountEntry") isEqualToString:@"true"]) continue;
+        widget->setProperty("mbsAccountEntry",kso_qt::QVariant(true));
+        if (![text isEqualToString:title]) {
+            if (button) ((kso_qt::QAbstractButton *)widget)->setText(literal(title));
+            else ((kso_qt::QLabel *)widget)->setText(literal(title));
+        }
+        widget->setToolTip(literal(email));
+    }
+    updating=NO;
+}
+
+static void MbsScheduleAccountEntryRefresh(void) {
+    static BOOL pending;
+    if (pending) return;
+    pending=YES;
+    dispatch_async(dispatch_get_main_queue(), ^{ pending=NO; MbsRefreshAccountEntries(); });
+}
+static BOOL MbsIsNativeAccountEntry(kso_qt::QObject *object,NSString *text) {
+    return [text isEqualToString:@"立即登录"] ||
+        (MbsIsAccountEntryText(text) && [property(object,"mbsAccountEntry") isEqualToString:@"true"]);
+}
+static NSArray<NSValue *> *MbsNativeAvatarFrames(NSRect windowFrame) {
+    NSMutableArray *frames=[NSMutableArray array];
+    auto widgets=kso_qt::QApplication::allWidgets(); auto *list=widgets.data;
+    for (int index=list->begin;index<list->end;++index) {
+        auto *widget=list->items[index];
+        if (![className(widget) isEqualToString:@"KPromeHeaderAvatar"] ||
+            ![property(widget,"visible") isEqualToString:@"true"]) continue;
+        int width=widget->property("width").toInt(),height=widget->property("height").toInt();
+        if (width<20 || width>220 || height<12 || height>64) continue;
+        MbsQtPoint point=widgetMapToGlobal(widget,{0,0});
+        NSRect frame=NSMakeRect(point.x,NSMaxY(NSScreen.screens.firstObject.frame)-point.y-height,width,height);
+        if (NSContainsRect(windowFrame,frame)) [frames addObject:[NSValue valueWithRect:frame]];
+    }
+    return frames;
+}
+static BOOL MbsSuppressLegacyAccountHover(kso_qt::QObject *receiver,unsigned short type) {
+    if (type!=5 && type!=10 && type!=127 && type!=129) return NO;
+    for (int depth=0;receiver && depth<7;++depth) {
+        NSString *name=className(receiver);
+        if ([name isEqualToString:@"KPromeHeaderAvatar"] || [name isEqualToString:@"KPromeHeaderAuthTip"] ||
+            MbsIsNativeAccountEntry(receiver,property(receiver,"text"))) return YES;
+        void *data=nullptr; memcpy(&data,(char *)receiver+8,8);
+        auto *parent=data?*(kso_qt::QObject **)((char *)data+16):nullptr;
+        if (parent==receiver) break;
+        receiver=parent;
+    }
+    return NO;
+}
 static bool routeClick(kso_qt::QObject*receiver,kso_qt::QEvent*event) {
     unsigned short type=0;if(event)memcpy(&type,(char*)event+16,2);
+    if (NSThread.isMainThread && MbsSuppressLegacyAccountHover(receiver,type)) return true;
     if(type==3 && NSThread.isMainThread) {
         @autoreleasepool {
             kso_qt::QObject*object=receiver;
             for(int depth=0;object&&depth<7;++depth) {
                 NSString *name=className(object),*text=property(object,"text");
-                if (depth == 0 && [text isEqualToString:@"立即登录"]) {
-                    MbsShowLoginForm(); return true;
+                if ((depth == 0 && MbsIsNativeAccountEntry(object,text)) || [name isEqualToString:@"KPromeHeaderAvatar"]) {
+                    MbsOpenAccountEntry(); return true;
                 }
                 if (isRemovedAssistantText(text)) return true;
                 if (isUpgradeText(text)) {
@@ -156,7 +286,11 @@ static bool routeClick(kso_qt::QObject*receiver,kso_qt::QEvent*event) {
             }
         }
     }
-    return kso_qt::QCoreApplication::notifyInternal2(receiver,event);
+    bool handled=kso_qt::QCoreApplication::notifyInternal2(receiver,event);
+    // Document toolbars are built after the window becomes key. Refresh after
+    // their actual Show event rather than relying on the earlier window event.
+    if (NSThread.isMainThread && type==17) MbsScheduleAccountEntryRefresh();
+    return handled;
 }
 static void buttonMouseRelease(kso_qt::QAbstractButton *button,kso_qt::QMouseEvent *event) {
     NSString *text=property((kso_qt::QObject*)button,"text");
@@ -165,8 +299,8 @@ static void buttonMouseRelease(kso_qt::QAbstractButton *button,kso_qt::QMouseEve
         MbsShowUpdates();
         return;
     }
-    if ([text containsString:@"立即登录"] || [text isEqualToString:@"登录"]) {
-        MbsShowLoginForm();
+    if (MbsIsNativeAccountEntry((kso_qt::QObject *)button,text) || [text isEqualToString:@"登录"]) {
+        MbsOpenAccountEntry();
         return;
     }
     buttonMouseReleaseOriginal(button,event);
@@ -177,8 +311,8 @@ static bool maybeShowLocalAccount(void *button) {
     if (isUpgradeText(text)) {
         MbsShowUpdates(); return true;
     }
-    if ([text containsString:@"立即登录"] || [text isEqualToString:@"登录"]) {
-        MbsShowLoginForm(); return true;
+    if (MbsIsNativeAccountEntry((kso_qt::QObject *)button,text) || [text isEqualToString:@"登录"]) {
+        MbsOpenAccountEntry(); return true;
     }
     return false;
 }
@@ -186,7 +320,7 @@ static void clickableLabelMouseRelease(void *button,kso_qt::QMouseEvent *event) 
     if (!maybeShowLocalAccount(button)) clickableLabelMouseReleaseOriginal(button,event);
 }
 static void headerAvatarMouseRelease(void *button,kso_qt::QMouseEvent *event) {
-    if (!maybeShowLocalAccount(button)) headerAvatarMouseReleaseOriginal(button,event);
+    MbsOpenAccountEntry();
 }
 static void headerAuthTipMouseRelease(void *button,kso_qt::QMouseEvent *event) {
     if (!maybeShowLocalAccount(button)) headerAuthTipMouseReleaseOriginal(button,event);
@@ -198,7 +332,7 @@ static void MbsShowAccountForUserClick(void) {
     NSEvent *event = NSApp.currentEvent;
     if ((event.type == NSEventTypeLeftMouseDown || event.type == NSEventTypeLeftMouseUp ||
          event.type == NSEventTypeKeyDown) &&
-        NSProcessInfo.processInfo.systemUptime - event.timestamp < 1.0) MbsShowLoginForm();
+        NSProcessInfo.processInfo.systemUptime - event.timestamp < 1.0) MbsOpenAccountEntry();
 }
 static void unloginedButtonClick(void *self) {
     MbsShowAccountForUserClick();
@@ -234,6 +368,7 @@ static bool desktopOpenUrl(const void *url) {
     return desktopOpenUrlOriginal(url);
 }
 struct Interpose {const void*replacement;const void*original;};
+#ifndef MBS_UI_ACTIONS_TEST
 __attribute__((used,section("__DATA,__interpose"))) static const Interpose actions[]={
     {(const void*)&labelText,(const void*)&labelSetText},
     {(const void*)&buttonText,(const void*)&buttonSetText},
@@ -248,8 +383,12 @@ __attribute__((used,section("__DATA,__interpose"))) static const Interpose actio
     {(const void*)&headerAvatarPointClicked,(const void*)&headerAvatarPointClickedOriginal},
     {(const void*)&headAvatarClicked,(const void*)&headAvatarClickedOriginal},
     {(const void*)&desktopOpenUrl,(const void*)&desktopOpenUrlOriginal},
-    {(const void*)&routeClick,(const void*)&kso_qt::QCoreApplication::notifyInternal2}
+    {(const void*)&routeClick,(const void*)&kso_qt::QCoreApplication::notifyInternal2},
+    {(const void*)&widgetSetVisible,(const void*)&widgetSetVisibleOriginal},
+    {(const void*)&widgetShow,(const void*)&widgetShowOriginal},
+    {(const void*)&nativeDrawAccountText,(const void*)&nativeDrawTextOriginal}
 };
+#endif
 static id MbsLoginMouseMonitor;
 static __weak NSWindow *MbsLoginPressedWindow;
 static NSRect MbsLoginPressedFrame;
@@ -261,9 +400,12 @@ static void InstallMbsLoginMouseMonitor(void) {
             NSPoint point=event.locationInWindow;
             if (event.type == NSEventTypeLeftMouseDown) {
                 MbsLoginPressedWindow = nil;
-                if ([window.title isEqualToString:@"首页"]) {
+                if (window.isVisible && window.contentView) {
                     NSPoint screen = [window convertPointToScreen:point];
-                    for (NSValue *value in MbsLoginButtonFrames(window,window.frame)) {
+                    BOOL headerOnly=![window.title isEqualToString:@"首页"];
+                    NSArray *frames=[MbsLoginButtonFrames(window,window.frame,headerOnly)
+                        arrayByAddingObjectsFromArray:MbsNativeAvatarFrames(window.frame)];
+                    for (NSValue *value in frames) {
                         if (NSPointInRect(screen,value.rectValue)) {
                             MbsLoginPressedWindow = window; MbsLoginPressedFrame = value.rectValue;
                             return nil;
@@ -274,15 +416,26 @@ static void InstallMbsLoginMouseMonitor(void) {
                 BOOL hit = window == MbsLoginPressedWindow &&
                     NSPointInRect([window convertPointToScreen:point],MbsLoginPressedFrame);
                 MbsLoginPressedWindow = nil;
-                if (hit) MbsShowLoginForm();
+                if (hit) MbsOpenAccountEntry();
                 return nil;
             }
             return event;
         }];
     });
 }
+#ifndef MBS_UI_ACTIONS_TEST
 __attribute__((constructor)) static void startChecks() {
     InstallMbsWorkspaceURLHook();
     [[NSNotificationCenter defaultCenter] addObserverForName:NSApplicationDidFinishLaunchingNotification object:nil queue:nil usingBlock:^(NSNotification*){MbsStartUpdateChecks();MbsStartAccountSession();}];
     InstallMbsLoginMouseMonitor();
+    dispatch_async(dispatch_get_main_queue(), ^{
+        for (NSNotificationName name in @[@"MbsLocalAccountDidChange",NSWindowDidBecomeKeyNotification,NSApplicationDidFinishLaunchingNotification]) {
+            [NSNotificationCenter.defaultCenter addObserverForName:name object:nil queue:nil usingBlock:^(NSNotification *note) {
+                if ([name isEqualToString:NSWindowDidBecomeKeyNotification]) MbsStartAccountSession();
+                MbsScheduleAccountEntryRefresh();
+            }];
+        }
+        MbsScheduleAccountEntryRefresh();
+    });
 }
+#endif
