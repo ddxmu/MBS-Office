@@ -6,6 +6,7 @@
 #include "MbsAiPanel.h"
 #include "MbsLocalAccount.h"
 #include "MbsUpdates.h"
+#include "MbsAbout.h"
 
 // ABI pinned to WPS 12.1.25867 / QtKso 5.12.12, arm64.
 namespace kso_qt {
@@ -85,6 +86,20 @@ static NSString *commandId(KCommand *command)
 struct AiCommand { const char *identifier; const char *operation; };
 static const AiCommand aiCommands[] = {
     {"MbsAiSettings", "settings"},
+    {"MbsAiPpt", "ppt"},
+    {"MbsAiDocumentPpt", "document-ppt"},
+    {"MbsAiOutlinePpt", "outline-ppt"},
+    {"MbsAiSlide", "slide"},
+    {"MbsAiSlides", "slides"},
+    {"MbsAiImage", "image"},
+    {"MbsAiWrite", "write"},
+    {"MbsAiRewrite", "rewrite"},
+    {"MbsAiExpand", "expand"},
+    {"MbsAiShorten", "shorten"},
+    {"MbsAiMore", "ask"},
+    {"MbsAiHistory", "history"},
+    {"About", "about"},
+    {"RbFileMenuAbout", "about"},
     {"MbsLocalAccount", "account"},
     {"MbsUpdates", "updates"},
     {"MbsAiPolish", "polish"},
@@ -197,13 +212,16 @@ static bool aiSendEvent(kso_qt::QObject *receiver, kso_qt::QEvent *event)
         bool settings = strcmp(operation, "settings") == 0;
         bool account = strcmp(operation, "account") == 0;
         bool updates = strcmp(operation, "updates") == 0;
+        bool about = strcmp(operation, "about") == 0;
+        bool history = strcmp(operation, "history") == 0;
         NSString *selection = @"";
-        if (!settings && !account && !updates && NSThread.isMainThread) {
+        if (!settings && !account && !updates && !about && !history && NSThread.isMainThread) {
             @try { selection = copySelection(command); }
             @catch (NSException *) { selection = @""; }
         }
         dispatch_async(dispatch_get_main_queue(), ^{
             if (account) MbsShowLocalAccount();
+            else if (about) MbsShowAbout();
             else if (updates) MbsShowUpdates();
             else if (settings) MbsShowAiSettings();
             else MbsShowAiAssistant(operation, selection.UTF8String);

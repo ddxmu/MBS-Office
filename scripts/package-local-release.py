@@ -13,6 +13,7 @@ p = argparse.ArgumentParser(description=__doc__)
 p.add_argument('--app', type=Path, required=True)
 p.add_argument('--work', type=Path, required=True)
 p.add_argument('--from-version', required=True)
+p.add_argument('--full-only', action='store_true', help='Stage the complete app without creating a module-only update')
 args = p.parse_args()
 repo = Path(__file__).resolve().parent.parent
 version = (repo/'VERSION').read_text().strip()
@@ -35,6 +36,11 @@ outer['CFBundleVersion'] = str(int(outer['CFBundleVersion'])+1)
 (app/'Contents/Info.plist').write_bytes(plistlib.dumps(outer))
 engine = app/'Contents/Resources/MbsEngine.app'
 subprocess.run(['python3',str(repo/'scripts/refresh-branding.py'),str(app)],check=True)
+res = 'Contents/Resources/MbsEngine.app/Contents/Resources/office6/res/'
+ribbon_paths = [res+'wppongmani.kui',res+'commands/wpp/ongmani/CT_MbsAI.kuip']
+subprocess.run(['python3',str(repo/'scripts/configure-presentation-ai.py'),str(app)],check=True)
+if not args.full_only and any((source/path).read_bytes() != (app/path).read_bytes() for path in ribbon_paths):
+    p.error('Presentation ribbon changes require --full-only; a module-only update cannot apply these UI changes.')
 inner = plistlib.loads((engine/'Contents/Info.plist').read_bytes())
 inner['MbsModuleVersion'] = version
 (engine/'Contents/Info.plist').write_bytes(plistlib.dumps(inner))
@@ -43,6 +49,9 @@ for target in [engine,app]:
 subprocess.run(['codesign','--verify','--deep','--strict',str(app)],check=True)
 (stage/'Applications').symlink_to('/Applications')
 (stage/'修复说明.txt').write_text((repo/f'release-notes/{version}.md').read_text(),encoding='utf-8')
+if args.full_only:
+    print(json.dumps({'app':str(app),'package':None,'version':version,'fullOnly':True}))
+    raise SystemExit(0)
 assets = args.work/'assets'
 assets.mkdir()
 payload = {name:(app/name).read_bytes() for name in paths}

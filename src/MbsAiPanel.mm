@@ -1,6 +1,7 @@
 #import <AppKit/AppKit.h>
 #import <Security/Security.h>
 #import "MbsAiPanel.h"
+#import "MbsAiPresentation.h"
 
 static NSString *const MbsAiService = @"com.mbs.office.ai";
 static MbsAiInsertCallback insertCallback;
@@ -10,6 +11,9 @@ static NSString *String(const char *value) {
     return value ? ([NSString stringWithUTF8String:value] ?: @"") : @"";
 }
 static NSURL *ConfigURL(void) {
+#ifdef MBS_AI_TEST
+    return [NSURL fileURLWithPath:[@(getenv("MBS_AI_TEST_HOME")) stringByAppendingPathComponent:@"ai-config.json"]];
+#endif
     NSURL *directory = [[[NSFileManager defaultManager] URLsForDirectory:NSApplicationSupportDirectory inDomains:NSUserDomainMask] firstObject];
     return [[directory URLByAppendingPathComponent:@"Mbs Office" isDirectory:YES] URLByAppendingPathComponent:@"ai-config.json"];
 }
@@ -61,6 +65,14 @@ static BOOL WriteKey(NSString *endpoint, NSString *key) {
     return status == errSecSuccess;
 }
 static NSString *OperationPrompt(NSString *operation) {
+    if ([@[@"ppt",@"document-ppt",@"outline-ppt",@"slide",@"slides",@"AI 生成 PPT",@"文档生成 PPT",@"大纲生成 PPT",@"AI 生成单页",@"AI 生成多页"] containsObject:operation]) {
+        BOOL single=[@[@"slide",@"AI 生成单页"] containsObject:operation];
+        return [NSString stringWithFormat:@"根据用户提供的主题、文档或大纲生成可编辑演示文稿的内容。%@ 保留给定事实，未知数据不编造。只返回 JSON 对象，格式为 {\"slides\":[{\"title\":\"标题\",\"bullets\":[\"要点\"]}]}，不要代码围栏或解释。每页标题不超过 40 字、最多 6 条要点，每条不超过 80 字。",single?@"必须只生成一页。":@"生成 6 至 12 页，覆盖封面、主要内容和总结；总计不超过 30 页。"];
+    }
+    if ([@[@"write",@"帮我写"] containsObject:operation]) return @"按用户主题与要求撰写文字，结构清晰，未知事实不要编造。只返回正文。";
+    if ([@[@"rewrite",@"帮我改"] containsObject:operation]) return @"改写并优化用户文字的结构和表达，保留原意、事实和数字。只返回改写结果。";
+    if ([@[@"expand",@"扩写"] containsObject:operation]) return @"扩写用户文字，补充解释和衔接，不编造事实、案例或数字。只返回扩写结果。";
+    if ([@[@"shorten",@"缩写"] containsObject:operation]) return @"精简用户文字，保留关键事实、结论和数字。只返回精简结果。";
     if ([operation isEqualToString:@"polish"] || [operation isEqualToString:@"润色"])
         return @"润色用户提供的文字，保留原意、事实、数字和语言。只返回润色结果。";
     if ([operation isEqualToString:@"proofread"] || [operation isEqualToString:@"拼写检查"])
@@ -188,11 +200,14 @@ static NSWindow *Window(NSString *title, NSSize size) {
 @property(nonatomic, strong) NSWindow *settingsWindow, *assistantWindow;
 @property(nonatomic, strong) NSTextField *endpointField, *settingsStatus, *assistantStatus;
 @property(nonatomic, strong) NSSecureTextField *keyField;
-@property(nonatomic, strong) NSPopUpButton *models, *operations;
+@property(nonatomic, strong) NSComboBox *models;
+@property(nonatomic, strong) NSPopUpButton *operations;
 @property(nonatomic, strong) NSTextView *input, *output;
-@property(nonatomic, strong) NSButton *fetchButton, *runButton, *insertButton;
-@property(nonatomic, strong) NSURLSessionDataTask *modelsTask, *chatTask;
-@property(nonatomic, copy) NSString *loadedEndpoint, *loadedKey;
+@property(nonatomic, strong) NSButton *fetchButton, *runButton, *insertButton, *exportButton;
+@property(nonatomic, strong) NSImageView *imageView;
+@property(nonatomic, strong) NSData *imageData;
+@property(nonatomic, strong) NSArray<NSDictionary *> *generatedSlides;
+@property(nonatomic, strong) NSURLSessionDataTask *modelsTask, *chatTask, *imageDownloadTask;
 @property(nonatomic) NSUInteger modelsGeneration, chatGeneration;
 + (instancetype)shared;
 - (void)showSettings;
@@ -221,9 +236,10 @@ static NSWindow *Window(NSString *title, NSSize size) {
         [view addSubview:self.keyField];
         self.fetchButton = Button(view, @"拉取模型", NSMakeRect(450, 173, 134, 32), self, @selector(fetchModels:));
         Label(view, @"选择模型", NSMakeRect(24, 139, 100, 22));
-        self.models = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(130, 135, 454, 30) pullsDown:NO];
+        self.models = [[NSComboBox alloc] initWithFrame:NSMakeRect(130, 135, 454, 30)];
+        self.models.placeholderString = @"拉取后选择，或输入服务支持的模型名";
         [view addSubview:self.models];
-        self.settingsStatus = Label(view, @"密钥保存在本机钥匙串。仅在拉取模型或运行 AI 时连接此服务。", NSMakeRect(24, 64, 560, 58));
+        self.settingsStatus = Label(view, @"所有 AI 功能共用此配置。密钥保存在本机钥匙串；图片生成需要服务及所选模型支持图片接口。", NSMakeRect(24, 64, 560, 58));
         Button(view, @"取消请求", NSMakeRect(24, 20, 105, 32), self, @selector(cancelModels:));
         Button(view, @"保存", NSMakeRect(470, 20, 114, 32), self, @selector(saveSettings:));
     }
@@ -231,11 +247,10 @@ static NSWindow *Window(NSString *title, NSSize size) {
         NSDictionary *config = ReadConfig();
         self.endpointField.stringValue = ConfigValue(config, @"endpoint");
         self.keyField.stringValue = ReadKey(self.endpointField.stringValue);
-        self.loadedEndpoint = self.endpointField.stringValue;
-        self.loadedKey = self.keyField.stringValue;
         [self.models removeAllItems];
         NSString *model = ConfigValue(config, @"model");
-        if (model.length) [self.models addItemWithTitle:model];
+        if (model.length) [self.models addItemWithObjectValue:model];
+        self.models.stringValue = model;
     }
     [NSApp activateIgnoringOtherApps:YES];
     [self.settingsWindow makeKeyAndOrderFront:nil];
@@ -261,12 +276,11 @@ static NSWindow *Window(NSString *title, NSSize size) {
             if ([model isKindOfClass:NSString.class] && [model length]) [names addObject:model];
         }
         if (!names.count) { self.settingsStatus.stringValue = @"服务没有返回可选模型，请确认 /models 接口兼容。"; return; }
-        NSString *previous = self.models.titleOfSelectedItem;
+        NSString *previous = self.models.stringValue;
         [self.models removeAllItems];
-        [self.models addItemsWithTitles:[[names allObjects] sortedArrayUsingSelector:@selector(localizedStandardCompare:)]];
-        if (previous && [names containsObject:previous]) [self.models selectItemWithTitle:previous];
-        self.loadedEndpoint = endpoint;
-        self.loadedKey = key;
+        NSArray *sorted = [[names allObjects] sortedArrayUsingSelector:@selector(localizedStandardCompare:)];
+        [self.models addItemsWithObjectValues:sorted];
+        self.models.stringValue = [names containsObject:previous] ? previous : sorted.firstObject;
         self.settingsStatus.stringValue = @"模型已拉取。选择支持聊天的模型，然后保存。";
     }];
 }
@@ -279,9 +293,9 @@ static NSWindow *Window(NSString *title, NSSize size) {
 }
 - (void)saveSettings:(id)sender {
     NSString *endpoint = Endpoint(self.endpointField.stringValue), *key = self.keyField.stringValue;
-    NSString *model = self.models.titleOfSelectedItem;
-    if (!endpoint || !key.length || !model.length || ![endpoint isEqualToString:self.loadedEndpoint] || ![key isEqualToString:self.loadedKey]) {
-        self.settingsStatus.stringValue = @"请使用当前 API 地址和密钥拉取模型，并选择模型后再保存。";
+    NSString *model = [self.models.stringValue stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    if (!endpoint || !key.length || !model.length || model.length>256 || [key rangeOfCharacterFromSet:NSCharacterSet.newlineCharacterSet].location!=NSNotFound) {
+        self.settingsStatus.stringValue = @"请填写有效的 API 地址、密钥和模型；可以拉取选择或手动输入模型名。";
         return;
     }
     if (!WriteKey(endpoint, key)) { self.settingsStatus.stringValue = @"密钥未能保存到钥匙串，请解锁钥匙串后重试。"; return; }
@@ -290,7 +304,7 @@ static NSWindow *Window(NSString *title, NSSize size) {
     [[NSFileManager defaultManager] createDirectoryAtURL:[url URLByDeletingLastPathComponent] withIntermediateDirectories:YES attributes:nil error:&error];
     NSData *data = [NSJSONSerialization dataWithJSONObject:@{@"version":@1, @"endpoint":endpoint, @"model":model} options:NSJSONWritingPrettyPrinted error:&error];
     if (error || ![data writeToURL:url options:NSDataWritingAtomic error:&error]) { self.settingsStatus.stringValue = @"配置保存失败，请检查本机文件权限。"; return; }
-    self.settingsStatus.stringValue = @"已保存。保存设置不会发送请求。";
+    self.settingsStatus.stringValue = @"已保存，所有 AI 功能将使用此配置。保存不会发送请求。";
     if (self.assistantStatus) self.assistantStatus.stringValue = [@"当前模型：" stringByAppendingString:model];
 }
 - (void)showAssistant:(NSString *)operation text:(NSString *)text {
@@ -299,8 +313,11 @@ static NSWindow *Window(NSString *title, NSSize size) {
         self.assistantWindow.delegate = self;
         NSView *view = self.assistantWindow.contentView;
         self.operations = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(24, 610, 215, 30) pullsDown:NO];
-        [self.operations addItemsWithTitles:@[@"润色", @"拼写检查", @"翻译", @"问答", @"总结"]];
+        [self.operations addItemsWithTitles:@[@"AI 生成 PPT",@"文档生成 PPT",@"大纲生成 PPT",@"AI 生成单页",@"AI 生成多页",@"AI 生成图片",@"帮我写",@"帮我改",@"扩写",@"缩写",@"润色", @"拼写检查", @"翻译", @"问答", @"总结"]];
+        self.operations.target=self; self.operations.action=@selector(operationChanged:);
         [view addSubview:self.operations];
+        Button(view, @"导入文档", NSMakeRect(255,610,108,32), self, @selector(importDocument:));
+        Button(view, @"历史会话", NSMakeRect(374,610,108,32), self, @selector(showHistory:));
         Button(view, @"设置", NSMakeRect(558, 610, 108, 32), self, @selector(settings:));
         Label(view, @"待处理文字 / 问题（点击运行后发送到你配置的服务）", NSMakeRect(24, 573, 642, 25));
         self.input = Editor(view, NSMakeRect(24, 370, 642, 200), YES);
@@ -308,21 +325,35 @@ static NSWindow *Window(NSString *title, NSSize size) {
         Button(view, @"取消请求", NSMakeRect(151, 327, 114, 32), self, @selector(cancelChat:));
         Label(view, @"结果（请核对后使用）", NSMakeRect(24, 292, 642, 25));
         self.output = Editor(view, NSMakeRect(24, 95, 642, 193), NO);
+        self.imageView = [[NSImageView alloc] initWithFrame:NSMakeRect(24,95,642,193)];
+        self.imageView.imageScaling=NSImageScaleProportionallyUpOrDown; self.imageView.hidden=YES;
+        [view addSubview:self.imageView];
         self.assistantStatus = Label(view, @"", NSMakeRect(24, 47, 642, 43));
         Button(view, @"复制结果", NSMakeRect(24, 10, 114, 32), self, @selector(copyResult:));
         self.insertButton = Button(view, @"写入文档", NSMakeRect(548, 10, 118, 32), self, @selector(insertResult:));
+        self.exportButton = Button(view, @"保存结果…", NSMakeRect(158,10,130,32),self,@selector(exportResult:));
+        self.exportButton.enabled=NO;
     }
-    NSDictionary *aliases = @{@"polish":@"润色", @"proofread":@"拼写检查", @"translate":@"翻译", @"ask":@"问答", @"summarize":@"总结"};
+    NSDictionary *aliases = @{@"polish":@"润色", @"proofread":@"拼写检查", @"translate":@"翻译", @"ask":@"问答", @"summarize":@"总结",@"ppt":@"AI 生成 PPT",@"document-ppt":@"文档生成 PPT",@"outline-ppt":@"大纲生成 PPT",@"slide":@"AI 生成单页",@"slides":@"AI 生成多页",@"image":@"AI 生成图片",@"write":@"帮我写",@"rewrite":@"帮我改",@"expand":@"扩写",@"shorten":@"缩写"};
     NSString *title = aliases[operation] ?: operation;
     if ([self.operations itemWithTitle:title]) [self.operations selectItemWithTitle:title];
     if (self.chatTask) [self cancelChat:nil];
     self.input.string = text;
     self.output.string = @"";
-    self.insertButton.enabled = insertCallback != NULL;
+    self.generatedSlides=nil;
+    self.imageData=nil; self.imageView.hidden=YES; self.output.enclosingScrollView.hidden=NO;
+    self.exportButton.enabled=NO;
+    self.insertButton.enabled = insertCallback != NULL && ![title isEqualToString:@"AI 生成图片"];
     NSString *model = ConfigValue(ReadConfig(), @"model");
     self.assistantStatus.stringValue = model.length ? [@"当前模型：" stringByAppendingString:model] : @"请先在设置中配置 API、拉取模型并保存。";
     [NSApp activateIgnoringOtherApps:YES];
     [self.assistantWindow makeKeyAndOrderFront:nil];
+    if ([operation isEqualToString:@"history"]) [self showHistory:nil];
+}
+- (void)operationChanged:(id)sender {
+    [self cancelChat:nil]; self.output.string=@""; self.imageData=nil;
+    self.generatedSlides=nil;
+    self.imageView.hidden=YES; self.output.enclosingScrollView.hidden=NO; self.exportButton.enabled=NO;
 }
 - (void)settings:(id)sender { [self showSettings]; }
 - (void)run:(id)sender {
@@ -331,22 +362,150 @@ static NSWindow *Window(NSString *title, NSSize size) {
     NSString *key = ReadKey(endpoint);
     if (!Endpoint(endpoint) || !key.length || !model.length) { self.assistantStatus.stringValue = @"请先在设置中配置 API、拉取模型并保存。"; [self showSettings]; return; }
     if (!self.input.string.length) { self.assistantStatus.stringValue = @"请输入需要处理的文字或问题。"; return; }
+    if (self.input.string.length>50000) { self.assistantStatus.stringValue=@"输入超过 5 万字，请选取需要处理的段落后重试。"; return; }
     [self.chatTask cancel];
     NSUInteger generation = ++self.chatGeneration;
     self.runButton.enabled = NO;
     self.output.string = @"";
+    self.generatedSlides=nil;
+    self.exportButton.enabled=NO; self.imageData=nil;
+    self.imageView.hidden=YES; self.output.enclosingScrollView.hidden=NO;
     self.assistantStatus.stringValue = @"正在处理…";
+    if ([self.operations.titleOfSelectedItem isEqualToString:@"AI 生成图片"]) {
+        self.chatTask=[[MbsAIClient shared] request:@"/images/generations" endpoint:endpoint key:key
+            body:@{@"model":model,@"prompt":self.input.string,@"n":@1,@"size":@"1024x1024",@"response_format":@"b64_json"}
+            completion:^(NSString *json,NSString *error) {
+                if (generation!=self.chatGeneration) return;
+                if (error) { self.runButton.enabled=YES; self.assistantStatus.stringValue=[error stringByAppendingString:@" 图片生成需要服务和当前模型支持 /images/generations。"]; return; }
+                NSDictionary *value=[NSJSONSerialization JSONObjectWithData:[json dataUsingEncoding:NSUTF8StringEncoding] options:0 error:nil];
+                NSArray *items=[value[@"data"] isKindOfClass:NSArray.class]?value[@"data"]:nil;
+                NSDictionary *item=[items.firstObject isKindOfClass:NSDictionary.class]?items.firstObject:nil;
+                NSString *base64=[item[@"b64_json"] isKindOfClass:NSString.class]?item[@"b64_json"]:nil;
+                if (base64.length) { [self finishImage:[[NSData alloc] initWithBase64EncodedString:base64 options:0] generation:generation]; return; }
+                NSURL *url=[item[@"url"] isKindOfClass:NSString.class]?[NSURL URLWithString:item[@"url"]]:nil;
+                if (![url.scheme.lowercaseString isEqualToString:@"https"] || !url.host.length || url.user || url.password) { [self finishImage:nil generation:generation]; return; }
+                // Image downloads use no API Authorization header or shared credentials.
+                self.imageDownloadTask=[[MbsAIClient shared].session dataTaskWithURL:url completionHandler:^(NSData *data,NSURLResponse *response,NSError *downloadError) {
+                    NSInteger status=[(NSHTTPURLResponse *)response statusCode];
+                    dispatch_async(dispatch_get_main_queue(), ^{ [self finishImage:!downloadError && status==200?data:nil generation:generation]; });
+                }];
+                [self.imageDownloadTask resume];
+            }];
+        return;
+    }
     self.chatTask = [[MbsAIClient shared] chat:self.input.string operation:self.operations.titleOfSelectedItem endpoint:endpoint key:key model:model completion:^(NSString *result, NSString *error) {
         if (generation != self.chatGeneration) return;
         self.chatTask = nil;
         self.runButton.enabled = YES;
         if (error) self.assistantStatus.stringValue = error;
-        else { self.output.string = result; self.assistantStatus.stringValue = @"已完成。请核对结果；可复制，或使用已连接的文档写入接口。"; }
+        else {
+            BOOL presentation=[@[@"AI 生成 PPT",@"文档生成 PPT",@"大纲生成 PPT",@"AI 生成单页",@"AI 生成多页"] containsObject:self.operations.titleOfSelectedItem];
+            if (presentation) {
+                NSError *parseError=nil;
+                self.generatedSlides=MbsAiSlides(result,[self.operations.titleOfSelectedItem isEqualToString:@"AI 生成单页"],&parseError);
+                if (!self.generatedSlides) { self.output.string=result; self.assistantStatus.stringValue=parseError.localizedDescription; return; }
+                NSMutableString *preview=[NSMutableString string]; NSUInteger i=0;
+                for (NSDictionary *slide in self.generatedSlides) {
+                    [preview appendFormat:@"%lu. %@\n",(unsigned long)++i,slide[@"title"]];
+                    for (NSString *bullet in slide[@"bullets"]) [preview appendFormat:@"  • %@\n",bullet];
+                    [preview appendString:@"\n"];
+                }
+                self.output.string=preview;
+            } else self.output.string = result;
+            self.exportButton.enabled=YES;
+            self.assistantStatus.stringValue = @"已完成。请核对结果；演示内容可保存为可编辑 PPTX，文字可复制或保存。";
+            [self saveHistory];
+        }
     }];
+}
+- (void)finishImage:(NSData *)data generation:(NSUInteger)generation {
+    if (generation!=self.chatGeneration) return;
+    self.chatTask=nil; self.imageDownloadTask=nil; self.runButton.enabled=YES;
+    NSImage *image=data.length>0 && data.length<=12*1024*1024?[[NSImage alloc] initWithData:data]:nil;
+    if (!image || image.size.width>4096 || image.size.height>4096) {
+        self.assistantStatus.stringValue=@"服务未返回可用图片，请确认所选模型支持图片生成。"; return;
+    }
+    NSBitmapImageRep *bitmap=[[NSBitmapImageRep alloc] initWithData:image.TIFFRepresentation];
+    self.imageData=[bitmap representationUsingType:NSBitmapImageFileTypePNG properties:@{}];
+    if (!self.imageData) { self.assistantStatus.stringValue=@"图片解析失败，请重试。"; return; }
+    self.imageView.image=image; self.imageView.hidden=NO; self.output.enclosingScrollView.hidden=YES;
+    self.exportButton.enabled=YES; self.insertButton.enabled=NO;
+    self.assistantStatus.stringValue=@"图片已生成，点击“保存结果…”保存 PNG。";
+}
+- (void)importDocument:(id)sender {
+    NSOpenPanel *panel=[NSOpenPanel openPanel]; panel.allowedFileTypes=@[@"txt",@"md",@"docx",@"rtf"];
+    panel.allowsMultipleSelection=NO; panel.canChooseDirectories=NO;
+    [panel beginSheetModalForWindow:self.assistantWindow completionHandler:^(NSModalResponse response) {
+        if (response!=NSModalResponseOK) return;
+        NSNumber *size=nil; [panel.URL getResourceValue:&size forKey:NSURLFileSizeKey error:nil];
+        if (size.unsignedLongLongValue>10*1024*1024) { self.assistantStatus.stringValue=@"文档超过 10 MB，请复制所需段落到输入框。"; return; }
+        NSString *suffix=panel.URL.pathExtension.lowercaseString; NSError *error=nil; NSString *text=nil;
+        if ([@[@"docx",@"rtf"] containsObject:suffix]) {
+            NSAttributedString *document=[[NSAttributedString alloc] initWithURL:panel.URL options:@{} documentAttributes:nil error:&error]; text=document.string;
+        } else text=[NSString stringWithContentsOfURL:panel.URL encoding:NSUTF8StringEncoding error:&error];
+        if (!text.length || text.length>50000) { self.assistantStatus.stringValue=@"无法读取正文或正文超过 5 万字，请复制所需段落到输入框。"; return; }
+        [self operationChanged:nil]; [self.operations selectItemWithTitle:@"文档生成 PPT"];
+        self.input.string=text; self.assistantStatus.stringValue=@"正文已导入；点击“运行 AI”后才会发送到所配置的服务。";
+    }];
+}
+- (void)exportResult:(id)sender {
+    if (!self.exportButton.enabled) return;
+    NSSavePanel *panel=[NSSavePanel savePanel];
+    NSString *type=self.imageData?@"png":(self.generatedSlides?@"pptx":@"txt");
+    panel.allowedFileTypes=@[type]; panel.nameFieldStringValue=[@"Mbs AI 结果." stringByAppendingString:type];
+    [panel beginSheetModalForWindow:self.assistantWindow completionHandler:^(NSModalResponse response) {
+        if (response!=NSModalResponseOK) return;
+        NSError *error=nil; BOOL ok;
+        if (self.imageData) ok=[self.imageData writeToURL:panel.URL options:NSDataWritingAtomic error:&error];
+        else if (self.generatedSlides) ok=MbsAiWritePresentation(self.generatedSlides,panel.URL,&error);
+        else ok=[self.output.string writeToURL:panel.URL atomically:YES encoding:NSUTF8StringEncoding error:&error];
+        self.assistantStatus.stringValue=ok?@"结果已保存。":(error.localizedDescription?:@"保存失败，请重试。");
+    }];
+}
+- (NSURL *)historyURL { return [[ConfigURL() URLByDeletingLastPathComponent] URLByAppendingPathComponent:@"ai-history.json"]; }
+- (NSArray *)history {
+    NSData *data=[NSData dataWithContentsOfURL:self.historyURL];
+    if (data.length>4*1024*1024) return @[];
+    id entries=data?[NSJSONSerialization JSONObjectWithData:data options:0 error:nil]:nil;
+    return [entries isKindOfClass:NSArray.class]?entries:@[];
+}
+- (void)saveHistory {
+    NSMutableArray *entries=[[self history] mutableCopy];
+    [entries insertObject:@{@"operation":self.operations.titleOfSelectedItem,@"input":self.input.string,@"output":self.output.string,
+        @"slides":self.generatedSlides?:@[],@"date":[NSDateFormatter localizedStringFromDate:NSDate.date dateStyle:NSDateFormatterShortStyle timeStyle:NSDateFormatterShortStyle]} atIndex:0];
+    while (entries.count>30) [entries removeLastObject];
+    NSData *data=[NSJSONSerialization dataWithJSONObject:entries options:0 error:nil];
+    while (data.length>4*1024*1024 && entries.count) { [entries removeLastObject]; data=[NSJSONSerialization dataWithJSONObject:entries options:0 error:nil]; }
+    [NSFileManager.defaultManager createDirectoryAtURL:self.historyURL.URLByDeletingLastPathComponent withIntermediateDirectories:YES attributes:nil error:nil];
+    [data writeToURL:self.historyURL options:NSDataWritingAtomic error:nil];
+    [NSFileManager.defaultManager setAttributes:@{NSFilePosixPermissions:@0600} ofItemAtPath:self.historyURL.path error:nil];
+}
+- (void)showHistory:(id)sender {
+    NSMenu *menu=[[NSMenu alloc] initWithTitle:@"本机历史会话（最近 30 条）"];
+    for (id entry in [self history]) {
+        if (![entry isKindOfClass:NSDictionary.class] || ![entry[@"operation"] isKindOfClass:NSString.class] ||
+            ![entry[@"input"] isKindOfClass:NSString.class] || ![entry[@"output"] isKindOfClass:NSString.class]) continue;
+        NSString *input=entry[@"input"], *preview=[input substringToIndex:MIN((NSUInteger)24,input.length)];
+        NSMenuItem *item=[[NSMenuItem alloc] initWithTitle:[NSString stringWithFormat:@"%@  %@  %@",entry[@"date"]?:@"",entry[@"operation"],preview] action:@selector(restoreHistory:) keyEquivalent:@""];
+        item.target=self; item.representedObject=entry; [menu addItem:item];
+    }
+    if (!menu.numberOfItems) { NSMenuItem *item=[[NSMenuItem alloc] initWithTitle:@"暂无历史会话" action:nil keyEquivalent:@""]; [menu addItem:item]; }
+    [menu popUpMenuPositioningItem:nil atLocation:NSMakePoint(374,610) inView:self.assistantWindow.contentView];
+}
+- (void)restoreHistory:(NSMenuItem *)item {
+    NSDictionary *entry=item.representedObject; [self operationChanged:nil];
+    [self.operations selectItemWithTitle:entry[@"operation"]]; self.input.string=entry[@"input"]; self.output.string=entry[@"output"];
+    if ([entry[@"slides"] isKindOfClass:NSArray.class] && [entry[@"slides"] count]) {
+        NSData *json=[NSJSONSerialization dataWithJSONObject:@{@"slides":entry[@"slides"]} options:0 error:nil];
+        self.generatedSlides=MbsAiSlides([[NSString alloc] initWithData:json encoding:NSUTF8StringEncoding],NO,nil);
+    }
+    self.exportButton.enabled=self.output.string.length>0;
+    self.assistantStatus.stringValue=@"已恢复本机历史会话，没有发送请求。";
 }
 - (void)cancelChat:(id)sender {
     ++self.chatGeneration;
     [self.chatTask cancel];
+    [self.imageDownloadTask cancel]; self.imageDownloadTask=nil;
     self.chatTask = nil;
     self.runButton.enabled = YES;
     self.assistantStatus.stringValue = @"请求已取消。";
