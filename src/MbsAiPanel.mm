@@ -373,7 +373,7 @@ static NSWindow *Window(NSString *title, NSSize size) {
     self.assistantStatus.stringValue = @"正在处理…";
     if ([self.operations.titleOfSelectedItem isEqualToString:@"AI 生成图片"]) {
         self.chatTask=[[MbsAIClient shared] request:@"/images/generations" endpoint:endpoint key:key
-            body:@{@"model":model,@"prompt":self.input.string,@"n":@1,@"size":@"1024x1024",@"response_format":@"b64_json"}
+            body:@{@"model":model,@"prompt":self.input.string,@"n":@1,@"size":@"1024x1024"}
             completion:^(NSString *json,NSString *error) {
                 if (generation!=self.chatGeneration) return;
                 if (error) { self.runButton.enabled=YES; self.assistantStatus.stringValue=[error stringByAppendingString:@" 图片生成需要服务和当前模型支持 /images/generations。"]; return; }
@@ -404,6 +404,9 @@ static NSWindow *Window(NSString *title, NSSize size) {
                 NSError *parseError=nil;
                 self.generatedSlides=MbsAiSlides(result,[self.operations.titleOfSelectedItem isEqualToString:@"AI 生成单页"],&parseError);
                 if (!self.generatedSlides) { self.output.string=result; self.assistantStatus.stringValue=parseError.localizedDescription; return; }
+                if ([self.operations.titleOfSelectedItem isEqualToString:@"AI 生成多页"] && self.generatedSlides.count<2) {
+                    self.generatedSlides=nil; self.assistantStatus.stringValue=@"多页模式需要至少两页，模型只返回了一页，请重新生成。"; return;
+                }
                 NSMutableString *preview=[NSMutableString string]; NSUInteger i=0;
                 for (NSDictionary *slide in self.generatedSlides) {
                     [preview appendFormat:@"%lu. %@\n",(unsigned long)++i,slide[@"title"]];

@@ -92,10 +92,17 @@ int main(int argc,const char **argv) { @autoreleasepool {
     }
     assert([[OperationPrompt(@"expand") lowercaseString] containsString:@"扩写"] && ![OperationPrompt(@"expand") isEqualToString:OperationPrompt(@"shorten")]);
     puts("PASS nine text operations use one saved model and distinct prompts");
-    responseText=@"{\"slides\":[{\"title\":\"测试 & <标题>\",\"bullets\":[\"事实一\",\"事实二\"]}]}";
-    for (NSString *operation in @[@"ppt",@"document-ppt",@"outline-ppt",@"slide",@"slides"]) {
+    NSString *singleSlide=@"{\"slides\":[{\"title\":\"测试 & <标题>\",\"bullets\":[\"事实一\",\"事实二\"]}]}";
+    for (NSString *operation in @[@"ppt",@"document-ppt",@"outline-ppt",@"slides",@"slide"]) {
+        BOOL multi=[operation isEqualToString:@"slides"];
+        if (multi) {
+            responseText=singleSlide; [c showAssistant:operation text:@"测试主题"]; [c run:nil];
+            Wait(^BOOL{ return c.runButton.enabled; });
+            assert(!c.generatedSlides && !c.exportButton.enabled);
+        }
+        responseText=multi?@"{\"slides\":[{\"title\":\"测试 & <标题>\",\"bullets\":[\"事实二\"]},{\"title\":\"总结\",\"bullets\":[]}]}":singleSlide;
         [c showAssistant:operation text:@"测试主题"]; [c run:nil]; Wait(^BOOL{ return c.runButton.enabled; });
-        assert(c.generatedSlides.count==1 && c.exportButton.enabled && [c.output.string containsString:@"事实二"]);
+        assert(c.generatedSlides.count==(multi?2:1) && c.exportButton.enabled && [c.output.string containsString:@"事实二"]);
     }
     NSError *error=nil; NSURL *file=[NSURL fileURLWithPath:@(argv[1])];
     assert(MbsAiWritePresentation(c.generatedSlides,file,&error) && !error);
