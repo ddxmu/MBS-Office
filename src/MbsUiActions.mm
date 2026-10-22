@@ -5,7 +5,6 @@
 #import "MbsUpdates.h"
 #import "MbsNativeLoginRecovery.h"
 #import "MbsLoginHitTarget.h"
-#import "MbsNativeToolbar.h"
 #include <string.h>
 #include <dlfcn.h>
 
@@ -427,12 +426,12 @@ static void InstallMbsLoginMouseMonitor(void) {
 #ifndef MBS_UI_ACTIONS_TEST
 __attribute__((constructor)) static void startChecks() {
     InstallMbsWorkspaceURLHook();
-    [[NSNotificationCenter defaultCenter] addObserverForName:NSApplicationDidFinishLaunchingNotification object:nil queue:nil usingBlock:^(NSNotification*){MbsStartUpdateChecks();MbsStartAccountSession();MbsStartNativeToolbar();}];
+    [[NSNotificationCenter defaultCenter] addObserverForName:NSApplicationDidFinishLaunchingNotification object:nil queue:nil usingBlock:^(NSNotification*){MbsStartUpdateChecks();MbsStartAccountSession();}];
     InstallMbsLoginMouseMonitor();
     dispatch_async(dispatch_get_main_queue(), ^{
         for (NSNotificationName name in @[@"MbsLocalAccountDidChange",NSWindowDidBecomeKeyNotification,NSApplicationDidFinishLaunchingNotification]) {
             [NSNotificationCenter.defaultCenter addObserverForName:name object:nil queue:nil usingBlock:^(NSNotification *note) {
-                if ([name isEqualToString:NSWindowDidBecomeKeyNotification]) { MbsStartAccountSession(); MbsStartNativeToolbar(); }
+                if ([name isEqualToString:NSWindowDidBecomeKeyNotification]) MbsStartAccountSession();
                 MbsScheduleAccountEntryRefresh();
             }];
         }
