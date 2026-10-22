@@ -57,6 +57,20 @@ int main(int argc, const char **argv) { @autoreleasepool {
     }));
     NSString *mode = @(argv[1]);
     MbsLocalAccountController *c = MbsLocalAccountController.shared;
+    if ([mode isEqual:@"activation-status"]) {
+        [c ensureAccountPopover];
+        NSDictionary *activation = @{@"plan":@"standard",@"expiresAt":@1800000000};
+        [c updateActivationState:@{@"verified":@YES,@"nativeAccepted":@YES,
+            @"originalVendorLicense":@NO,@"status":@"授权码已激活",@"activation":activation}];
+        assert([c.accountPanelAuthorization.stringValue containsString:@"Mbs 账号授权码已验证"]);
+        assert([c.accountPanelAuthorization.stringValue containsString:@"编辑器许可未验证"]);
+        assert(![c.accountPanelAuthorization.stringValue containsString:@"已激活"]);
+        assert([c.activationSummary.stringValue containsString:@"Mbs 账号标准授权"]);
+        [c updateActivationState:@{@"verified":@NO,@"status":@"登录已失效"}];
+        assert([c.accountPanelAuthorization.stringValue isEqual:@"登录已失效"]);
+        assert([c.activationSummary.stringValue isEqual:@"可由管理员为当前账号生成授权码"]);
+        puts("PASS activation-status"); return 0;
+    }
     if ([mode isEqual:@"login"] || [mode isEqual:@"signed-in-click"] || [mode isEqual:@"background-refresh"] || [mode isEqual:@"signed-in-login-form"]) {
         [c show]; c.email.stringValue = testEmail; c.password.stringValue = @"synthetic-password";
         [c submit:nil]; pump(^BOOL{ return !c.session; });

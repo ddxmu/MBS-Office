@@ -629,14 +629,21 @@ static NSTextField *AccountLabel(NSView *view, NSString *text, NSRect frame) {
     [self updateActivationState:note.userInfo];
 }
 - (void)updateActivationState:(NSDictionary *)state {
-    self.accountPanelAuthorization.stringValue = state[@"status"] ?: @"授权状态待验证";
+    NSString *status = state[@"status"] ?: @"授权状态待验证";
+    if ([status isEqual:@"授权码已激活"]) status = @"Mbs 账号授权码已验证";
+    if ([status isEqual:@"Mbs 授权已验证"]) status = @"Mbs 账号授权已验证";
+    // The Mbs grant and the native probe do not establish an editor license.
+    BOOL editorUnverified = [state[@"verified"] boolValue] && ![state[@"originalVendorLicense"] boolValue];
+    self.accountPanelAuthorization.stringValue = editorUnverified ?
+        [status stringByAppendingString:@"\n编辑器许可未验证，当前授权不代表编辑功能可用。"] : status;
+    self.accountPanelAuthorization.textColor = editorUnverified ? NSColor.secondaryLabelColor : NSColor.tertiaryLabelColor;
     self.activationButton.enabled = ![state[@"busy"] boolValue];
     NSDictionary *activation = [state[@"activation"] isKindOfClass:NSDictionary.class] ? state[@"activation"] : nil;
     if ([state[@"verified"] boolValue] && activation) {
         NSDateFormatter *format = [NSDateFormatter new]; format.dateFormat = @"yyyy-MM-dd";
         NSString *date = [format stringFromDate:[NSDate dateWithTimeIntervalSince1970:[activation[@"expiresAt"] doubleValue]]];
         self.activationSummary.stringValue = [NSString stringWithFormat:@"%@ · 有效至 %@",
-            [activation[@"plan"] isEqual:@"vip"] ? @"Mbs VIP 授权" : @"Mbs 标准授权",date];
+            [activation[@"plan"] isEqual:@"vip"] ? @"Mbs 账号 VIP 授权" : @"Mbs 账号标准授权",date];
         if ([state[@"status"] isEqual:@"授权码已激活"]) self.activationCode.stringValue = @"";
     } else self.activationSummary.stringValue = @"可由管理员为当前账号生成授权码";
 }
