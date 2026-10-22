@@ -180,7 +180,8 @@ static NSArray *MbsNativeAuthorizationStates(void) {
     NSArray *native = verified ? MbsNativeAuthorizationStates() : @[];
     BOOL accepted = native.count == 3;
     for (NSDictionary *state in native) accepted = accepted && [state[@"accepted"] boolValue] && [state[@"level"] intValue] >= 2;
-    NSDictionary *receipt = @{@"verified":@(verified),@"nativeAccepted":@(accepted),@"nativeManagers":native,
+    NSDictionary *receipt = @{@"verified":@(verified),@"independentAccepted":@(verified),
+        @"nativeAccepted":@(accepted),@"nativeManagers":native,
         @"activation":verified && self.activation ? self.activation : (id)NSNull.null,
         @"legacyKeychainReadsDeclined":@(MbsLegacyKeychainDenialCount()),
         @"busy":@(self.task != nil),@"startupRoutes":@(MbsStartupRouteCount()),
@@ -305,7 +306,9 @@ void MbsResetEditorLicense(void) {
 char *MbsCopyEditorAuthorizationState(void) {
     __block NSData *data;
     void (^read)(void) = ^{
-        data = [NSJSONSerialization dataWithJSONObject:@{@"authority":@"mbs-custom",@"verified":@(MbsHasVerifiedEditorLicense()),
+        BOOL verified = MbsHasVerifiedEditorLicense();
+        data = [NSJSONSerialization dataWithJSONObject:@{@"authority":@"mbs-custom",@"verified":@(verified),
+            @"independentAccepted":@(verified),
             @"expiresAt":@(MbsGetGrantExpiry()),@"status":MbsEditorAuthorization.shared.status ?: @"未连接",
             @"activation":MbsHasVerifiedEditorLicense() && MbsEditorAuthorization.shared.activation ? MbsEditorAuthorization.shared.activation : (id)NSNull.null,
             @"busy":@(MbsEditorAuthorization.shared.task != nil),
