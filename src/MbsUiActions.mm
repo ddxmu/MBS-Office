@@ -5,6 +5,7 @@
 #import "MbsUpdates.h"
 #import "MbsNativeLoginRecovery.h"
 #import "MbsLoginHitTarget.h"
+#import "MbsIndependentEditorRouting.h"
 #include <string.h>
 #include <dlfcn.h>
 
@@ -354,6 +355,7 @@ static bool desktopOpenUrl(const void *url) {
         auto hostValue = qurlHostOriginal(url, 0);
         NSString *host = read(hostValue);
         auto pathValue = qurlPathOriginal(url, 0);
+        NSString *localPath = read(pathValue);
         if ([host.lowercaseString isEqualToString:@"account.wps.cn"] &&
             [read(pathValue) isEqualToString:@"/wpsmaclogin"]) {
             return true;
@@ -364,6 +366,7 @@ static bool desktopOpenUrl(const void *url) {
             return true;
         }
         if (isBlockedRemoteHost(host)) return true;
+        if (!host.length && MbsOpenIndependentEditorPath(localPath)) return true;
     }
     return desktopOpenUrlOriginal(url);
 }

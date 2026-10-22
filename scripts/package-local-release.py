@@ -13,6 +13,8 @@ p = argparse.ArgumentParser(description=__doc__)
 p.add_argument('--app', type=Path, required=True)
 p.add_argument('--work', type=Path, required=True)
 p.add_argument('--from-version', required=True)
+p.add_argument('--independent-suite', type=Path,
+                help='Bundle the locally built independent Word/Excel/PowerPoint/PDF helpers')
 p.add_argument('--full-only', action='store_true', help='Stage the complete app without creating a module-only update')
 args = p.parse_args()
 repo = Path(__file__).resolve().parent.parent
@@ -22,6 +24,8 @@ args.work.mkdir()
 source = args.app.resolve()
 outer = plistlib.loads((source/'Contents/Info.plist').read_bytes())
 assert outer['CFBundleShortVersionString'] == args.from_version, 'Installed app does not match the requested baseline'
+if args.independent_suite and not args.full_only:
+    p.error('--independent-suite requires --full-only; helper applications are part of the complete image')
 stage = args.work/'dmg-root'
 stage.mkdir()
 app = stage/'Mbs Office.app'
@@ -33,6 +37,19 @@ for name, file in paths.items():
     subprocess.run(['codesign','--force','--sign','-',str(app/name)],check=True)
 outer['CFBundleShortVersionString'] = version
 outer['CFBundleVersion'] = str(int(outer['CFBundleVersion'])+1)
+if args.independent_suite:
+    suite = args.independent_suite.resolve()
+    helper_names = ['MyAI Word.app', 'MyAI Excel.app', 'MyAI Power Point.app', 'MyAI PDF.app']
+    for helper_name in helper_names:
+        helper = suite/'Contents/Helpers'/helper_name
+        if not helper.is_dir() or not (helper/'Contents/Info.plist').is_file():
+            p.error(f'独立编辑器缺少内置模块：{helper}')
+        shutil.copytree(helper, app/'Contents/Helpers'/helper_name, dirs_exist_ok=False)
+    launcher = repo/'build/MbsLauncher'
+    if not launcher.is_file():
+        p.error('缺少 build/MbsLauncher，请先运行 scripts/build-launcher.sh')
+    shutil.copy2(launcher, app/'Contents/MacOS/MbsLauncher')
+    outer['MbsIndependentEditorRouting'] = True
 (app/'Contents/Info.plist').write_bytes(plistlib.dumps(outer))
 engine = app/'Contents/Resources/MbsEngine.app'
 subprocess.run(['python3',str(repo/'scripts/refresh-branding.py'),str(app)],check=True)
