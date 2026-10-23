@@ -20,8 +20,8 @@ static bool pdfEditingPrivileges(const kso_qt::QStringList &privileges)
         intptr_t offset = *reinterpret_cast<const intptr_t *>(data + 16);
         const uint16_t *text = reinterpret_cast<const uint16_t *>(data + offset);
         bool matched = false;
-        // pdfmain maps edit-content operations to these exact privilege IDs.
-        const char *keys[] = {"pdf_edit", "pdf_text_edit", "pdf_pic_edit"};
+        // pdfmain maps edit-content and stamp operations to these exact IDs.
+        const char *keys[] = {"pdf_edit", "pdf_text_edit", "pdf_pic_edit", "pdf_stamp"};
         for (const char *key : keys) {
             if (length != static_cast<int32_t>(strlen(key))) continue;
             int32_t j = 0;
