@@ -157,9 +157,11 @@ static NSString *accountText(kso_qt::QObject *object,NSString *text) {
     object->setProperty("mbsAccountEntry",kso_qt::QVariant(true));
     return MbsAccountEntryTitle();
 }
+static void MbsScheduleAccountEntryRefresh(void);
 static void labelText(kso_qt::QLabel*label,const kso_qt::QString&text) {
     NSString *value=read(text),*replacement=accountText((kso_qt::QObject *)label,updated(value));
     if(![value isEqualToString:replacement])label->setText(literal(replacement));else label->setText(text);
+    if ([value containsString:@"当前编辑内容尚未保存"]) MbsScheduleAccountEntryRefresh();
 }
 static void buttonText(kso_qt::QAbstractButton*button,const kso_qt::QString&text) {
     NSString *value=read(text),*replacement=accountText((kso_qt::QObject *)button,updated(value));
@@ -184,9 +186,11 @@ static BOOL MbsIsLegacyAccountPanel(NSString *name) {
 }
 static void widgetSetVisible(kso_qt::QWidget *widget,bool visible) {
     widget->setVisible(visible && !MbsIsLegacyAccountPanel(className(widget)));
+    if (visible) MbsScheduleAccountEntryRefresh();
 }
 static void widgetShow(kso_qt::QWidget *widget) {
     if (!MbsIsLegacyAccountPanel(className(widget))) widget->show();
+    MbsScheduleAccountEntryRefresh();
 }
 static void MbsRefreshNativeAvatar(kso_qt::QWidget *widget,NSString *title,NSString *email) {
     // These native header APIs only update its painted name and layout;
