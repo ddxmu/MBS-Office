@@ -6,6 +6,7 @@ const char *MbsCurrentAccountEmail(void) { return email.length ? strdup(email.UT
 void MbsShowLoginForm(void) {}
 void MbsShowLocalAccount(void) { ++accountOpened; }
 void MbsShowUpdates(void) {}
+bool MbsHasVerifiedEditorLicense(void) { return false; }
 void applicationCtor(void *,int &,char **,int,void *) __asm__("__ZN6kso_qt12QApplicationC1ERiPPciPNS_26QPlatformIntegrationConfigE");
 void buttonCtor(void *,const kso_qt::QString &,void *) __asm__("__ZN6kso_qt11QPushButtonC1ERKNS_7QStringEPNS_7QWidgetE");
 void labelCtor(void *,const kso_qt::QString &,void *,int) __asm__("__ZN6kso_qt6QLabelC1ERKNS_7QStringEPNS_7QWidgetENS_6QFlagsINS_2Qt10WindowTypeEEE");

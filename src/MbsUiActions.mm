@@ -3,10 +3,12 @@
 #import "MbsLocalAccount.h"
 #import "MbsAccountEntry.h"
 #import "MbsUpdates.h"
+#import "MbsEditorAuthorization.h"
 #import "MbsNativeLoginRecovery.h"
 #import "MbsLoginHitTarget.h"
 #include <string.h>
 #include <dlfcn.h>
+#include <mach-o/dyld.h>
 
 namespace kso_qt {
 class __attribute__((visibility("hidden"))) QString {
@@ -198,6 +200,38 @@ static void MbsRefreshNativeAvatar(kso_qt::QWidget *widget,NSString *title,NSStr
     widget->setToolTip(literal(email)); widget->updateGeometry();
 }
 
+static auto MbsPdfNoticeSwitch() -> void (*)(void *,bool) {
+    // This private API is stripped from the shipped export table. Resolve only
+    // the inspected arm64 image, using both its UUID and instruction fingerprint.
+    static const unsigned char uuid[]={0x94,0x0f,0x36,0x91,0x17,0x7e,0x30,0xf1,0xbb,0xe1,0x0e,0xaa,0xdd,0x55,0x80,0x4b};
+    static const unsigned char code[]={0xf4,0x4f,0xbe,0xa9,0xfd,0x7b,0x01,0xa9,0xfd,0x43,0x00,0x91,0xf4,0x03,0x00,0xaa,0x08,0xec,0x42,0xf9,0xf3,0x03,0x01,0x2a};
+    for (uint32_t i=0;i<_dyld_image_count();++i) {
+        const char *name=_dyld_get_image_name(i);
+        if (!name || !strstr(name,"/pdfmain.framework/")) continue;
+        const auto *header=(const mach_header_64 *)_dyld_get_image_header(i);
+        if (header->magic!=MH_MAGIC_64 || header->cputype!=CPU_TYPE_ARM64) continue;
+        const auto *command=(const load_command *)(header+1);
+        bool matched=false;
+        for (uint32_t j=0;j<header->ncmds;++j) {
+            if (command->cmd==LC_UUID && !memcmp(((const uuid_command *)command)->uuid,uuid,sizeof(uuid))) matched=true;
+            command=(const load_command *)((const char *)command+command->cmdsize);
+        }
+        const auto *entry=(const unsigned char *)header+0x12cbbc;
+        if (matched && !memcmp(entry,code,sizeof(code))) return (void (*)(void *,bool))entry;
+    }
+    return nullptr;
+}
+static void MbsRefreshPdfTrialNotice(kso_qt::QWidget *view) {
+    bool active=MbsHasVerifiedEditorLicense();
+    if (!active && ![property(view,"mbsPdfTrialNoticeDisabled") isEqualToString:@"true"]) return;
+    // Use the original view's notice switch; it hides an existing notice and
+    // disables its later display without affecting the document's dirty state.
+    auto disable=MbsPdfNoticeSwitch();
+    if (!disable) return;
+    disable(view,active);
+    view->setProperty("mbsPdfTrialNoticeDisabled",kso_qt::QVariant(active));
+}
+
 static void MbsRefreshAccountEntries(void) {
     static BOOL updating;
     if (updating) return;
@@ -208,6 +242,7 @@ static void MbsRefreshAccountEntries(void) {
     for (int index=list->begin;index<list->end;++index) {
         auto *widget=list->items[index];
         NSString *kind=className(widget);
+        if ([kind isEqualToString:@"KxPdfView"]) { MbsRefreshPdfTrialNotice(widget); continue; }
         if (MbsIsLegacyAccountPanel(kind)) { widget->setVisible(false); continue; }
         if ([kind isEqualToString:@"KPromeHeaderAvatar"]) {
             MbsRefreshNativeAvatar(widget,title,email); continue;
@@ -429,7 +464,7 @@ __attribute__((constructor)) static void startChecks() {
     [[NSNotificationCenter defaultCenter] addObserverForName:NSApplicationDidFinishLaunchingNotification object:nil queue:nil usingBlock:^(NSNotification*){MbsStartUpdateChecks();MbsStartAccountSession();}];
     InstallMbsLoginMouseMonitor();
     dispatch_async(dispatch_get_main_queue(), ^{
-        for (NSNotificationName name in @[@"MbsLocalAccountDidChange",NSWindowDidBecomeKeyNotification,NSApplicationDidFinishLaunchingNotification]) {
+        for (NSNotificationName name in @[@"MbsLocalAccountDidChange",@"MbsEditorAuthorizationDidChange",NSWindowDidBecomeKeyNotification,NSApplicationDidFinishLaunchingNotification]) {
             [NSNotificationCenter.defaultCenter addObserverForName:name object:nil queue:nil usingBlock:^(NSNotification *note) {
                 if ([name isEqualToString:NSWindowDidBecomeKeyNotification]) MbsStartAccountSession();
                 MbsScheduleAccountEntryRefresh();
