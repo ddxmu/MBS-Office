@@ -40,7 +40,7 @@ class ActivationRoutes:
 <p>授权码绑定已注册账号；兑换后绑定客户端设备。撤销或到期后，客户端联网续期时同步状态。基础编辑不因授权码失效而被锁定。</p>{message}
 <form method="post" action="/admin/mbs-licenses/create"><input type="hidden" name="csrf" value="{token}">
 <label>注册账号<select name="userId" required>{options}</select></label>
-<div class="grid"><label>有效天数<input type="number" name="days" min="1" max="365" value="30" required></label>
+<div class="grid"><label>有效天数（从生成时起）<input type="number" name="days" min="1" max="365" value="365" required></label>
 <label>设备上限<input type="number" name="maxDevices" min="1" max="10" value="1" required></label>
 <label>授权等级<select name="plan"><option value="standard">Mbs 标准授权</option><option value="vip">Mbs VIP 授权</option></select></label></div>
 <button type="submit">生成授权码</button></form></section>

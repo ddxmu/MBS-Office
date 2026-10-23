@@ -61,6 +61,14 @@ class ActivationTest(unittest.TestCase):
         self.assertIsNone(self.store.for_device(1,self.device,now=self.now))
         with self.assertRaises(ActivationError): self.redeem(issued["code"])
 
+    def test_year_activation_keeps_full_expiry_in_short_lived_grant(self):
+        issued = self.store.create(1,365,plan="vip",now=self.now)
+        claims = json.loads(base64.b64decode(self.redeem(issued["code"])["payload"]))
+        self.assertEqual(claims["expiresAt"],self.now+86400)
+        self.assertEqual(claims["activation"]["expiresAt"],self.now+365*86400)
+        self.assertIsNotNone(self.store.for_device(1,self.device,now=self.now+364*86400))
+        self.assertIsNone(self.store.for_device(1,self.device,now=self.now+365*86400))
+
     def test_concurrent_redemption_cannot_exceed_device_limit(self):
         code = self.store.create(1,1)["code"]
         def attempt(device):

@@ -124,6 +124,7 @@ class EditorLicenseHTTPTest(unittest.TestCase):
         request = urllib.request.Request(base+"/admin/mbs-licenses",headers={"Cookie":cookie})
         with urllib.request.urlopen(request) as response:
             page = response.read().decode()
+        self.assertRegex(page, r'name="days"[^>]*value="365"')
         csrf = re.search(r'name="csrf" value="([0-9a-f]{64})"',page).group(1)
         def admin(path, fields):
             data = urllib.parse.urlencode(fields).encode()
