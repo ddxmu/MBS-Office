@@ -36,6 +36,9 @@ int main(int argc,const char **argv) { @autoreleasepool {
         MbsRequestEditorLicense(token.UTF8String,email.UTF8String);
         pump(^BOOL{ return !MbsEditorAuthorization.shared.task; });
         NSCAssert(MbsHasVerifiedEditorLicense(),@"server-signed grant must verify");
+        NSDictionary *activation=MbsEditorAuthorization.shared.activation;
+        NSCAssert([MbsEditorAuthorization.shared.activationState isEqual:@"active"] && [activation[@"plan"] isEqual:@"standard"],@"new account automatically activated");
+        NSCAssert([activation[@"expiresAt"] doubleValue]-NSDate.date.timeIntervalSince1970>364*86400,@"full year activation");
         NSCAssert(MbsReadGrantFile("editor-license.json").length,@"signed grant persisted");
         NSCAssert(!MbsNativeAuthorizationStates().count,@"test executable cannot pretend to be native editor");
     } else if ([mode isEqual:@"restore"]) {

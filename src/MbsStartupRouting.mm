@@ -29,13 +29,42 @@ static BOOL MbsRecoverFailedLogin(NSWindow *window) {
 }
 
 @interface MbsStartupRepairController : NSObject
+@property NSOpenPanel *documentPicker;
 + (instancetype)shared;
 - (void)repair:(id)sender;
+- (void)openService:(id)sender;
+- (void)openDocument:(id)sender;
 @end
 @implementation MbsStartupRepairController
 + (instancetype)shared {
     static MbsStartupRepairController *value; static dispatch_once_t once;
     dispatch_once(&once, ^{ value=[MbsStartupRepairController new]; }); return value;
+}
+- (void)openService:(id)sender {
+    [NSWorkspace.sharedWorkspace openURL:[NSURL URLWithString:@"https://ttys.ddxmu.com/"]];
+}
+- (void)openDocument:(id)sender {
+    if (self.documentPicker) { [self.documentPicker makeKeyAndOrderFront:nil]; return; }
+    NSWindow *home = [sender isKindOfClass:NSView.class] ? [sender window] : NSApp.keyWindow;
+    if (!home) return;
+    NSOpenPanel *picker=[NSOpenPanel openPanel]; self.documentPicker=picker;
+    picker.title=@"打开文档"; picker.prompt=@"打开";
+    picker.canChooseFiles=YES; picker.canChooseDirectories=NO; picker.allowsMultipleSelection=NO;
+    picker.allowedFileTypes=@[@"doc",@"docx",@"dot",@"dotx",@"odt",@"rtf",@"txt",@"wps",@"wpt",
+        @"xls",@"xlsx",@"xlsm",@"xlsb",@"csv",@"ods",@"et",@"ett",@"ppt",@"pptx",@"pptm",@"odp",@"dps",@"dpt",@"pdf"];
+    [picker beginSheetModalForWindow:home completionHandler:^(NSModalResponse result) {
+        self.documentPicker=nil;
+        if (result!=NSModalResponseOK || !picker.URL) return;
+        // Address this editor explicitly; the system default may be another app.
+        [NSWorkspace.sharedWorkspace openURLs:@[picker.URL] withApplicationAtURL:NSBundle.mainBundle.bundleURL
+            configuration:NSWorkspaceOpenConfiguration.configuration completionHandler:^(NSRunningApplication *app,NSError *error) {
+                if (!error) return;
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    NSAlert *alert=[NSAlert new]; alert.messageText=@"文档未能打开";
+                    alert.informativeText=error.localizedDescription; [alert runModal];
+                });
+            }];
+    }];
 }
 - (void)repair:(id)sender {
     BOOL recovered=NO;
@@ -101,8 +130,25 @@ static NSImage *MbsStartupRepairIcon(void) {
 static void MbsInstallHomeRepairButton(NSWindow *window) {
     if (!window.contentView) return;
     NSView *view=window.contentView;
-    NSView *existing=[view viewWithTag:0x4d425352];
     BOOL home=[window.title isEqualToString:@"首页"];
+    // The two icon tiles are painted by Qt and omitted from its AX tree.
+    // Own transparent hit targets preserve the artwork and expose real actions.
+    for (NSUInteger index=0;index<2;++index) {
+        NSInteger tag=0x4d425344+index;
+        NSButton *entry=(NSButton *)[view viewWithTag:tag];
+        if (!entry && home) {
+            entry=[NSButton buttonWithTitle:@"" target:MbsStartupRepairController.shared
+                action:index==0 ? @selector(openDocument:) : @selector(openService:)];
+            entry.tag=tag; entry.transparent=YES;
+            entry.accessibilityLabel=index==0 ? @"文档" : @"服务";
+            entry.toolTip=index==0 ? @"选择并打开文档" : @"打开 Mbs Office 官网";
+            entry.frame=NSMakeRect(8,view.isFlipped ? 98+72*index : NSHeight(view.bounds)-160-72*index,52,62);
+            entry.autoresizingMask=view.isFlipped ? NSViewMaxYMargin : NSViewMinYMargin;
+            [view addSubview:entry positioned:NSWindowAbove relativeTo:nil];
+        }
+        entry.hidden=!home;
+    }
+    NSView *existing=[view viewWithTag:0x4d425352];
     if (existing) { existing.hidden=!home; return; }
     if (!home) return;
     NSButton *button=[NSButton buttonWithTitle:@"" target:MbsStartupRepairController.shared action:@selector(repair:)];

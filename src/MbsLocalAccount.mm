@@ -645,12 +645,15 @@ static NSTextField *AccountLabel(NSView *view, NSString *text, NSRect frame) {
         self.activationSummary.stringValue = [NSString stringWithFormat:@"%@ · 有效至 %@",
             [activation[@"plan"] isEqual:@"vip"] ? @"Mbs 账号 VIP 授权" : @"Mbs 账号标准授权",date];
         if ([state[@"status"] isEqual:@"授权码已激活"]) self.activationCode.stringValue = @"";
-    } else self.activationSummary.stringValue = @"可由管理员为当前账号生成授权码";
+    } else self.activationSummary.stringValue = @"输入新授权码激活，或点击激活同步网站续期";
+    self.activationButton.title = [state[@"busy"] boolValue] ? @"连接中…" : @"激活";
 }
 - (void)redeemActivationCode:(id)sender {
     if (!self.sessionEmail.length) return;
     self.activationButton.enabled = NO;
-    MbsRedeemActivationCode(self.activationCode.stringValue.UTF8String);
+    NSString *code = [self.activationCode.stringValue stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    if (code.length) MbsRedeemActivationCode(code.UTF8String);
+    else MbsRequestEditorLicense(self.sessionToken.UTF8String,self.sessionEmail.UTF8String);
 }
 
 - (void)refreshMembership:(BOOL)force {

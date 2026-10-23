@@ -7,7 +7,7 @@ static NSString *MbsTestHomeDirectory(void) { return @(getenv("MBS_TEST_HOME"));
 
 static BOOL cachedGrant, offline;
 static BOOL appActive = YES;
-static NSInteger responseCode = 200, grantRequests;
+static NSInteger responseCode = 200, grantRequests, codeRequests;
 static NSString *testEmail = @"ui-check@example.invalid";
 static NSString *testToken = @"synthetic-test-session-token-000000000000";
 bool MbsHasVerifiedEditorLicense(void) { return cachedGrant; }
@@ -15,7 +15,7 @@ bool MbsCanRestoreAccountSession(const char *token, const char *email) {
     return cachedGrant && token && email && [@(token) isEqual:testToken] && [@(email) isEqual:testEmail];
 }
 void MbsRequestEditorLicense(const char *token, const char *email) { ++grantRequests; }
-void MbsRedeemActivationCode(const char *code) {}
+void MbsRedeemActivationCode(const char *code) { ++codeRequests; }
 void MbsResetEditorLicense(void) { cachedGrant = NO; }
 char *MbsCopyEditorAuthorizationState(void) { return strdup("{}"); }
 
@@ -68,7 +68,12 @@ int main(int argc, const char **argv) { @autoreleasepool {
         assert([c.activationSummary.stringValue containsString:@"Mbs 账号标准授权"]);
         [c updateActivationState:@{@"verified":@NO,@"status":@"登录已失效"}];
         assert([c.accountPanelAuthorization.stringValue isEqual:@"登录已失效"]);
-        assert([c.activationSummary.stringValue isEqual:@"可由管理员为当前账号生成授权码"]);
+        assert([c.activationSummary.stringValue containsString:@"输入新授权码激活"]);
+        c.sessionEmail=testEmail; c.sessionToken=testToken;
+        c.activationCode.stringValue=@"  "; [c redeemActivationCode:nil];
+        assert(grantRequests==1 && codeRequests==0);
+        c.activationCode.stringValue=@"MBS-test"; [c redeemActivationCode:nil];
+        assert(grantRequests==1 && codeRequests==1);
         puts("PASS activation-status"); return 0;
     }
     if ([mode isEqual:@"login"] || [mode isEqual:@"signed-in-click"] || [mode isEqual:@"background-refresh"] || [mode isEqual:@"signed-in-login-form"]) {

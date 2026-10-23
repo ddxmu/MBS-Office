@@ -35,6 +35,12 @@ int main(void) { @autoreleasepool {
     NSMutableDictionary *activated = [valid mutableCopy];
     activated[@"activation"] = @{@"id":@1,@"plan":@"vip",@"expiresAt":@(now+86400),@"maxDevices":@1,@"deviceId":device};
     NSCAssert(MbsVerifyEditorGrant(sign(activated),publicBytes,nonce,email,device,session,now),@"signed activation grant");
+    activated[@"activationState"] = @"active";
+    NSCAssert(MbsVerifyEditorGrant(sign(activated),publicBytes,nonce,email,device,session,now),@"signed active state");
+    for (NSString *state in @[@"expired",@"revoked",@"device_limit",@"unknown"]) {
+        NSMutableDictionary *changed=[activated mutableCopy]; changed[@"activationState"]=state;
+        NSCAssert(!MbsVerifyEditorGrant(sign(changed),publicBytes,nonce,email,device,session,now),@"reject inconsistent activation state");
+    }
     for (NSDictionary *mutation in @[@{@"id":@0},@{@"plan":@"admin"},@{@"expiresAt":@(now+1)},
         @{@"deviceId":NSUUID.UUID.UUIDString},@{@"maxDevices":@0},@{@"maxDevices":@YES}]) {
         NSMutableDictionary *metadata = [activated[@"activation"] mutableCopy]; [metadata addEntriesFromDictionary:mutation];

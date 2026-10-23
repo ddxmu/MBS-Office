@@ -69,7 +69,7 @@ class ActivationRoutes:
 
     def activation_post(self, path):
         admin = path in ("/admin/mbs-licenses/create","/admin/mbs-licenses/revoke")
-        if not admin and path != "/api/mbs/activation/redeem":
+        if not admin and path not in ("/api/mbs/activation/redeem","/api/mbs/activation/auto"):
             return False
         if admin and not self.is_admin():
             self.redirect("/admin/login"); return True
@@ -102,8 +102,12 @@ class ActivationRoutes:
                 session = db.execute("select expires_at from mbs_sessions where token_hash=? and expires_at>?",(session_hash,time.time())).fetchone()
             if not session:
                 self.send_json({"ok":False,"error":"登录已失效"},401); return True
-            grant = self.activation_store().redeem(fields.get("code"),user,fields["deviceId"],fields["nonce"],
-                session_hash,session[0],EditorLicenseIssuer(context["data_dir"]))
+            issuer = EditorLicenseIssuer(context["data_dir"])
+            if path.endswith("/auto"):
+                grant = self.activation_store().auto_activate(user,fields["deviceId"],fields["nonce"],session_hash,session[0],issuer)
+            else:
+                grant = self.activation_store().redeem(fields.get("code"),user,fields["deviceId"],fields["nonce"],
+                    session_hash,session[0],issuer)
             self.send_json({"ok":True,**grant})
         except (ValueError,TypeError) as error:
             if admin: self.activation_admin_page(str(error),status=400)

@@ -47,8 +47,16 @@ int main(void) { @autoreleasepool {
     NSButton *repair=(NSButton *)[home.contentView viewWithTag:0x4d425352];
     assert(repair && repair.image && !repair.hidden && [repair.accessibilityLabel isEqual:@"一键修复启动回调"]);
     assert(repair.frame.origin.x==18 && repair.frame.size.width==32);
+    NSButton *documents=(NSButton *)[home.contentView viewWithTag:0x4d425344];
+    NSButton *service=(NSButton *)[home.contentView viewWithTag:0x4d425345];
+    assert(documents && service && documents.transparent && service.transparent);
+    assert([documents.accessibilityLabel isEqual:@"文档"] && documents.action==@selector(openDocument:));
+    assert([service.accessibilityLabel isEqual:@"服务"] && service.action==@selector(openService:));
+    assert(NSMaxY(documents.frame)==NSHeight(home.contentView.bounds)-98);
     [home.contentView setFrameSize:NSMakeSize(900,700)]; assert(repair.frame.origin.y==18);
+    assert(NSMaxY(documents.frame)==NSHeight(home.contentView.bounds)-98);
     home.title=@"文字文稿1"; MbsInstallHomeRepairButton(home); assert(repair.hidden);
+    assert(documents.hidden && service.hidden);
     home.title=@"首页"; MbsInstallHomeRepairButton(home); assert(!repair.hidden);
     puts("PASS: supplied refresh image embedded; home-only button stays bottom-left and is reused across tabs");
 } }

@@ -38,6 +38,45 @@ class ActivationTest(unittest.TestCase):
         args.update(values)
         return self.store.redeem(**args)
 
+    def auto(self, **values):
+        args = dict(user=self.user,device=self.device,nonce=secrets.token_urlsafe(32),
+            session_hash=hashlib.sha256(b"session").hexdigest(),session_expires=self.now+400*86400,
+            issuer=self.issuer,now=self.now)
+        args.update(values)
+        return json.loads(base64.b64decode(self.store.auto_activate(**args)["payload"]))
+
+    def test_first_auto_activation_gets_one_year_only_once(self):
+        first = self.auto()
+        self.assertEqual(first["activationState"],"active")
+        self.assertEqual(first["activation"]["plan"],"standard")
+        self.assertEqual(first["activation"]["expiresAt"],self.now+365*86400)
+        self.assertEqual(self.auto()["activation"]["id"],first["activation"]["id"])
+        expired = self.auto(now=self.now+366*86400)
+        self.assertEqual(expired["activationState"],"expired")
+        self.assertNotIn("activation",expired)
+        self.assertEqual(len(self.store.list_admin()),1)
+
+    def test_auto_activation_honors_device_limit_and_manual_renewal(self):
+        issued = self.store.create(1,1,max_devices=2,plan="vip",now=self.now)
+        self.assertEqual(self.auto()["activation"]["id"],issued["id"])
+        self.assertEqual(self.auto(device=str(uuid.uuid4()))["activationState"],"active")
+        self.assertEqual(self.auto(device=str(uuid.uuid4()))["activationState"],"device_limit")
+        self.store.revoke(issued["id"],now=self.now)
+        self.assertEqual(self.auto()["activationState"],"revoked")
+        renewed = self.store.create(1,365,plan="vip",now=self.now)
+        self.assertEqual(self.auto()["activation"]["id"],renewed["id"])
+        self.assertEqual(self.store.list_admin()[0]["device_count"],1)
+
+    def test_auto_activation_transaction_rejects_bad_nonce_and_device_race(self):
+        with self.assertRaises(ValueError): self.auto(nonce="bad")
+        self.assertEqual(self.store.list_admin(),[])
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            results = list(pool.map(lambda device:self.auto(device=device)["activationState"],
+                [str(uuid.uuid4()),str(uuid.uuid4())]))
+        self.assertCountEqual(results,["active","device_limit"])
+        self.assertEqual(len(self.store.list_admin()),1)
+        self.assertEqual(self.store.list_admin()[0]["device_count"],1)
+
     def test_code_is_hashed_and_claims_are_bound(self):
         issued = self.store.create(1,30,plan="vip",now=self.now)
         claims = json.loads(base64.b64decode(self.redeem(issued["code"])["payload"]))

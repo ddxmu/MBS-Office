@@ -114,6 +114,28 @@ class EditorLicenseTest(unittest.TestCase):
 
 @unittest.skipUnless(os.environ.get("MBS_ADMIN_SOURCE"), "Set MBS_ADMIN_SOURCE to test the deployed handler candidate")
 class EditorLicenseHTTPTest(unittest.TestCase):
+    def test_auto_activation_first_account_new_device_and_expiry(self):
+        email = secrets.token_hex(8)+"@example.invalid"
+        _,registered,_ = self.call("register",{"email":email,"password":secrets.token_urlsafe(20)})
+        token = registered["token"]
+        device,nonce = str(uuid.uuid4()),secrets.token_urlsafe(32)
+        fields = {"deviceId":device,"nonce":nonce}
+        self.assertEqual(self.call("activation/auto",fields)[0],401)
+        self.assertEqual(self.call("activation/auto",fields,token,origin="https://wrong.example")[0],403)
+        status,result,_ = self.call("activation/auto",fields,token)
+        self.assertEqual(status,200)
+        issuer = EditorLicenseIssuer(self.temp.name)
+        claims = verify(result,issuer.public_key_base64,device,nonce,time.time())
+        self.assertEqual(claims["activationState"],"active")
+        self.assertEqual(claims["activation"]["plan"],"standard")
+        self.assertAlmostEqual(claims["activation"]["expiresAt"]-time.time(),365*86400,delta=5)
+        _,result,_ = self.call("activation/auto",dict(fields,deviceId=str(uuid.uuid4())),token)
+        self.assertEqual(json.loads(base64.b64decode(result["payload"]))["activationState"],"device_limit")
+        with sqlite3.connect(self.app.DB_PATH) as db:
+            db.execute("update mbs_activation_codes set expires_at=? where id=?",(time.time()-1,claims["activation"]["id"]))
+        _,result,_ = self.call("activation/auto",fields,token)
+        self.assertEqual(verify(result,issuer.public_key_base64,device,nonce,time.time())["activationState"],"expired")
+
     def test_activation_admin_redemption_renewal_and_revocation(self):
         email = secrets.token_hex(8)+"@example.invalid"
         _, registered, _ = self.call("register",{"email":email,"password":secrets.token_urlsafe(20)})

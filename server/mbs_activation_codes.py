@@ -95,3 +95,37 @@ class ActivationCodes:
             db.execute("insert or ignore into mbs_activation_devices (code_id,device_id,redeemed_at) values (?,?,?)",
                        (row["id"],device,now))
             return grant
+
+    def auto_activate(self, user, device, nonce, session_hash, session_expires, issuer, now=None):
+        now = int(time.time() if now is None else now)
+        with sqlite3.connect(self.database) as db:
+            db.row_factory = sqlite3.Row
+            db.execute("begin immediate")
+            if not db.execute("select 1 from mbs_users where id=?",(user["id"],)).fetchone():
+                raise ActivationError("注册账号不存在")
+            rows = db.execute('''select c.*,
+                exists(select 1 from mbs_activation_devices d where d.code_id=c.id and d.device_id=?) bound,
+                (select count(*) from mbs_activation_devices d where d.code_id=c.id) device_count
+                from mbs_activation_codes c where c.user_id=?
+                order by (c.plan='vip') desc,c.expires_at desc''',(device,user["id"])).fetchall()
+            # A first activation grants one year once per account, never again
+            # after expiry/revocation or after changing installations.
+            if not rows:
+                raw = secrets.token_hex(16).upper()
+                code = "MBS-"+"-".join(raw[i:i+8] for i in range(0,32,8))
+                row = db.execute('''insert into mbs_activation_codes
+                    (code_hash,hint,user_id,plan,expires_at,max_devices,created_at)
+                    values (?,?,?,'standard',?,1,?)''',
+                    (hashlib.sha256(code.encode()).hexdigest(),code[-8:],user["id"],now+365*86400,now))
+                rows = [dict(db.execute("select * from mbs_activation_codes where id=?",(row.lastrowid,)).fetchone(),bound=False,device_count=0)]
+            valid = [row for row in rows if row["revoked_at"] is None and row["expires_at"]>now]
+            row = next((row for row in valid if row["bound"] or row["device_count"]<row["max_devices"]),None)
+            activation = self._public(row,device) if row else None
+            state = "active" if row else ("device_limit" if valid else
+                ("expired" if any(r["revoked_at"] is None for r in rows) else "revoked"))
+            grant = issuer.issue(user,session_hash,min(session_expires,row["expires_at"]) if row else session_expires,
+                device,nonce,now=now,activation=activation,activation_state=state)
+            if row:
+                db.execute("insert or ignore into mbs_activation_devices (code_id,device_id,redeemed_at) values (?,?,?)",
+                    (row["id"],device,now))
+            return grant
