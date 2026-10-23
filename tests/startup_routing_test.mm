@@ -20,6 +20,12 @@
 @implementation StartupWindow
 - (void)performClose:(id)sender { self.closes++; }
 @end
+@interface StartupNativeWindow : NSWindow
+@property NSArray *nodes;
+@end
+@implementation StartupNativeWindow
+- (NSArray *)accessibilityChildren { return self.nodes ?: @[]; }
+@end
 static StartupNode *node(NSString *role, NSString *title) {
     StartupNode *n = [StartupNode new]; n.accessibilityRole=role;
     n.accessibilityTitle=title; n.accessibilityChildren=@[]; return n;
@@ -59,4 +65,29 @@ int main(void) { @autoreleasepool {
     assert(documents.hidden && service.hidden);
     home.title=@"首页"; MbsInstallHomeRepairButton(home); assert(!repair.hidden);
     puts("PASS: supplied refresh image embedded; home-only button stays bottom-left and is reused across tabs");
+    MbsInstallQuietPresentation();
+    StartupNativeWindow *legacy=[[StartupNativeWindow alloc] initWithContentRect:NSMakeRect(0,0,800,600)
+        styleMask:NSWindowStyleMaskTitled backing:NSBackingStoreBuffered defer:NO];
+    legacy.releasedWhenClosed=NO;
+    legacy.nodes=@[status,later]; legacy.title=@"账号登录"; [legacy orderFront:nil];
+    assert(legacy.isVisible && legacy.alphaValue==0);
+    legacy.alphaValue=1; assert(legacy.alphaValue==0);
+    [legacy makeKeyWindow]; assert(!legacy.isKeyWindow);
+    assert(MbsRecoverFailedLogin(legacy) && later.presses==2 && legacy.isVisible);
+    legacy.nodes=@[node(NSAccessibilityStaticTextRole,@"请输入账号和密码")];
+    objc_setAssociatedObject(legacy,&MbsLegacyLoadingSince,[NSDate dateWithTimeIntervalSinceNow:-11],OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    MbsApplyQuietPresentation(legacy); assert(legacy.alphaValue==1);
+    legacy.title=@"Mbs Office 登录"; assert(!MbsIsQuietLegacyWindow(legacy));
+    [legacy close];
+    StartupNativeWindow *toast=[[StartupNativeWindow alloc] initWithContentRect:NSMakeRect(0,0,520,70)
+        styleMask:NSWindowStyleMaskBorderless backing:NSBackingStoreBuffered defer:NO];
+    toast.releasedWhenClosed=NO; toast.alphaValue=0.8;
+    toast.nodes=@[node(NSAccessibilityStaticTextRole,@"云服务连接异常，已开启离线特殊兼容")];
+    [toast orderFront:nil]; assert(toast.isVisible && toast.alphaValue==0);
+    toast.nodes=@[node(NSAccessibilityStaticTextRole,@"Mbs 网站暂时无法连接，请重试")];
+    MbsApplyQuietPresentation(toast); assert(fabs(toast.alphaValue-0.8)<0.01);
+    [toast close];
+    assert(MbsLegacyQuietStartupKinds()==3);
+    assert(home.alphaValue==1);
+    puts("PASS: legacy loading/error and exact old cloud toast stay quiet before ordering; real callback still executes; working login, Mbs errors and reused-window alpha preserved");
 } }

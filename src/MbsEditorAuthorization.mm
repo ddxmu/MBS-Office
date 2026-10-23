@@ -182,12 +182,15 @@ static NSArray *MbsNativeAuthorizationStates(void) {
     BOOL verified = MbsHasVerifiedEditorLicense();
     NSArray *native = verified ? MbsNativeAuthorizationStates() : @[];
     BOOL accepted = native.count == 3;
+    auto quietKinds=(unsigned (*)())dlsym(RTLD_DEFAULT,"MbsLegacyQuietStartupKinds");
+    unsigned quiet=quietKinds ? quietKinds() : 0;
     for (NSDictionary *state in native) accepted = accepted && [state[@"accepted"] boolValue] && [state[@"level"] intValue] >= 2;
     NSDictionary *receipt = @{@"verified":@(verified),@"nativeAccepted":@(accepted),@"nativeManagers":native,
         @"activation":verified && self.activation ? self.activation : (id)NSNull.null,
         @"activationState":self.activationState ?: @"unknown",
         @"legacyKeychainReadsDeclined":@(MbsLegacyKeychainDenialCount()),
         @"busy":@(self.task != nil),@"startupRoutes":@(MbsStartupRouteCount()),
+        @"quietedLegacyLogin":@((quiet&1)!=0),@"quietedLegacyCloudNotice":@((quiet&2)!=0),
         @"status":self.status ?: @"未连接",@"authority":@"mbs-custom",@"originalVendorLicense":@NO,
         @"pid":@(getpid()),@"executable":NSBundle.mainBundle.executablePath ?: @"",
         @"expiresAt":@(MbsGetGrantExpiry()),@"recordedAt":@(NSDate.date.timeIntervalSince1970)};

@@ -1,11 +1,83 @@
 #import <AppKit/AppKit.h>
 #import "MbsNativeLoginRecovery.h"
 #import "MbsStartupRouting.h"
+#import <objc/runtime.h>
 #include <dlfcn.h>
 #include <mach-o/getsect.h>
 
 static unsigned MbsStartupRoutes;
 static BOOL MbsRecoveringLegacyWindow;
+static NSDate *MbsLastStartupRecovery;
+static unsigned MbsQuietStartupKinds;
+extern "C" unsigned MbsLegacyQuietStartupKinds(void) { return MbsQuietStartupKinds; }
+
+// Keep the real Qt window and its completion action alive. Only its old
+// presentation is quiet; a raw close would skip the startup callback.
+static char MbsLegacyLoadingSince;
+static BOOL MbsIsQuietLegacyWindow(NSWindow *window) {
+    if ([window.title isEqualToString:@"账号登录"]) {
+        NSDate *since=objc_getAssociatedObject(window,&MbsLegacyLoadingSince);
+        if (!since) {
+            since=NSDate.date;
+            objc_setAssociatedObject(window,&MbsLegacyLoadingSince,since,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        }
+        // Keep loading quiet, but never strand a working login as an
+        // invisible modal if the old service unexpectedly becomes available.
+        return MbsFailedNativeLoginAction(window)!=nil || -since.timeIntervalSinceNow<10;
+    }
+    NSSize size=window.frame.size;
+    return !window.title.length && !(window.styleMask & NSWindowStyleMaskTitled) &&
+        size.width<=850 && size.height<=120 && MbsHasLegacyCloudNotice(window);
+}
+static char MbsQuietOriginalAlpha;
+static IMP MbsOriginalWindowTitle, MbsOriginalWindowOrder, MbsOriginalWindowAlpha, MbsOriginalWindowKey;
+static void MbsApplyQuietPresentation(NSWindow *window) {
+    NSNumber *saved=objc_getAssociatedObject(window,&MbsQuietOriginalAlpha);
+    if (MbsIsQuietLegacyWindow(window)) {
+        MbsQuietStartupKinds|=[window.title isEqualToString:@"账号登录"] ? 1 : 2;
+        if (!saved) objc_setAssociatedObject(window,&MbsQuietOriginalAlpha,@(window.alphaValue),OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        window.alphaValue=0;
+    } else if (saved) {
+        objc_setAssociatedObject(window,&MbsQuietOriginalAlpha,nil,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        window.alphaValue=saved.doubleValue;
+    }
+}
+static void MbsQuietWindowTitle(id window,SEL action,NSString *title) {
+    ((void (*)(id,SEL,id))MbsOriginalWindowTitle)(window,action,title);
+    MbsApplyQuietPresentation(window);
+}
+static void MbsQuietWindowOrder(id window,SEL action,NSWindowOrderingMode mode,NSInteger other) {
+    if (mode!=NSWindowOut && ![window isVisible] && [[window title] isEqualToString:@"账号登录"])
+        objc_setAssociatedObject(window,&MbsLegacyLoadingSince,NSDate.date,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    if (mode!=NSWindowOut) MbsApplyQuietPresentation(window);
+    ((void (*)(id,SEL,NSWindowOrderingMode,NSInteger))MbsOriginalWindowOrder)(window,action,mode,other);
+}
+static void MbsQuietWindowAlpha(id window,SEL action,CGFloat alpha) {
+    if (MbsIsQuietLegacyWindow(window)) {
+        if (!objc_getAssociatedObject(window,&MbsQuietOriginalAlpha))
+            objc_setAssociatedObject(window,&MbsQuietOriginalAlpha,@(alpha),OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        alpha=0;
+    }
+    ((void (*)(id,SEL,CGFloat))MbsOriginalWindowAlpha)(window,action,alpha);
+}
+static void MbsQuietWindowKey(id window,SEL action) {
+    if (![window isVisible] && [[window title] isEqualToString:@"账号登录"])
+        objc_setAssociatedObject(window,&MbsLegacyLoadingSince,NSDate.date,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    if (MbsIsQuietLegacyWindow(window)) { MbsApplyQuietPresentation(window); return; }
+    ((void (*)(id,SEL))MbsOriginalWindowKey)(window,action);
+}
+static void MbsInstallQuietPresentation(void) {
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        SEL selectors[]={@selector(setTitle:),@selector(orderWindow:relativeTo:),@selector(setAlphaValue:),@selector(makeKeyWindow)};
+        IMP replacements[]={(IMP)MbsQuietWindowTitle,(IMP)MbsQuietWindowOrder,(IMP)MbsQuietWindowAlpha,(IMP)MbsQuietWindowKey};
+        IMP *originals[]={&MbsOriginalWindowTitle,&MbsOriginalWindowOrder,&MbsOriginalWindowAlpha,&MbsOriginalWindowKey};
+        for (NSUInteger index=0;index<4;++index) {
+            Method method=class_getInstanceMethod(NSWindow.class,selectors[index]);
+            *originals[index]=method_setImplementation(method,replacements[index]);
+        }
+    });
+}
 
 extern "C" unsigned MbsLegacyStartupPromptCount(void) {
     return __atomic_load_n(&MbsStartupRoutes,__ATOMIC_RELAXED);
@@ -24,7 +96,10 @@ static BOOL MbsRecoverFailedLogin(NSWindow *window) {
         handled = [later accessibilityPerformPress];
     }
     MbsRecoveringLegacyWindow = NO;
-    if (handled) __atomic_add_fetch(&MbsStartupRoutes,1,__ATOMIC_RELAXED);
+    if (handled) {
+        __atomic_add_fetch(&MbsStartupRoutes,1,__ATOMIC_RELAXED);
+        MbsLastStartupRecovery=NSDate.date;
+    }
     return handled;
 }
 
@@ -76,6 +151,11 @@ static BOOL MbsRecoverFailedLogin(NSWindow *window) {
         [alert addButtonWithTitle:@"好"]; [alert runModal]; return;
     }
     alert.informativeText=@"自动回调恢复已启用。若工具栏仍为灰色，可保存文档并正常重启，重新完成启动流程。退出时仍会提示保存未保存的文档。";
+    if (MbsLastStartupRecovery) {
+        NSDateFormatter *format=[NSDateFormatter new]; format.dateFormat=@"HH:mm:ss";
+        alert.informativeText=[NSString stringWithFormat:@"本次启动已在后台完成 %u 次恢复回调，最近一次：%@。若工具栏仍为灰色，可保存文档并正常重启修复。",
+            MbsLegacyStartupPromptCount(),[format stringFromDate:MbsLastStartupRecovery]];
+    }
     [alert addButtonWithTitle:@"保存并重启修复"];
     [alert addButtonWithTitle:@"取消"];
     if ([alert runModal]!=NSAlertFirstButtonReturn) return;
@@ -163,12 +243,14 @@ static void MbsInstallHomeRepairButton(NSWindow *window) {
 
 #ifndef MBS_STARTUP_ROUTING_TEST
 __attribute__((constructor)) static void MbsInstallStartupRouting(void) {
+    MbsInstallQuietPresentation();
     // Closing the Cocoa window skips the editor's Later-login completion.
     // Recover only a failed page through its existing action; leave a working
     // native login, document windows and Mbs account panels untouched.
     for (NSNotificationName name in @[NSWindowDidBecomeKeyNotification, NSWindowDidUpdateNotification]) {
         [NSNotificationCenter.defaultCenter addObserverForName:name object:nil queue:nil
             usingBlock:^(NSNotification *note) {
+                MbsApplyQuietPresentation(note.object);
                 MbsRecoverFailedLogin(note.object);
                 MbsInstallHomeRepairButton(note.object);
             }];
@@ -176,7 +258,10 @@ __attribute__((constructor)) static void MbsInstallStartupRouting(void) {
     // A native login can run a nested event loop before app launch completes.
     CFRunLoopTimerRef timer = CFRunLoopTimerCreateWithHandler(kCFAllocatorDefault,
         CFAbsoluteTimeGetCurrent()+0.5, 0.5, 0, 0, ^(CFRunLoopTimerRef) {
-            for (NSWindow *window in NSApp.windows) MbsRecoverFailedLogin(window);
+            for (NSWindow *window in NSApp.windows) {
+                MbsApplyQuietPresentation(window);
+                MbsRecoverFailedLogin(window);
+            }
         });
     CFRunLoopAddTimer(CFRunLoopGetMain(), timer, kCFRunLoopCommonModes);
     CFRelease(timer);
