@@ -2,6 +2,8 @@
 #import <objc/runtime.h>
 #import "MbsAbout.h"
 #import "MbsBrandAppearance.h"
+#import "MbsStartupRouting.h"
+#import "MbsUpdates.h"
 
 static NSString *const MbsRepositoryURL = @"https://github.com/ddxmu/MBS-Office";
 
@@ -23,6 +25,7 @@ static NSString *MbsApplicationVersion(void) {
     dispatch_once(&once, ^{ value = [MbsAboutController new]; }); return value;
 }
 - (void)openRepository:(id)sender { [NSWorkspace.sharedWorkspace openURL:[NSURL URLWithString:MbsRepositoryURL]]; }
+- (void)repairStartup:(id)sender { MbsShowStartupRepair(); }
 - (void)show {
     if (!self.window) {
         self.window = [[NSWindow alloc] initWithContentRect:NSMakeRect(0,0,450,260)
@@ -41,6 +44,8 @@ static NSString *MbsApplicationVersion(void) {
         }
         NSButton *button = [NSButton buttonWithTitle:@"打开 GitHub" target:self action:@selector(openRepository:)];
         button.frame = NSMakeRect(300,20,126,32); button.bezelStyle = NSBezelStyleRounded; [view addSubview:button];
+        NSButton *repair=[NSButton buttonWithTitle:@"一键修复启动回调" target:self action:@selector(repairStartup:)];
+        repair.frame=NSMakeRect(24,20,192,32); repair.bezelStyle=NSBezelStyleRounded; [view addSubview:repair];
         [self.window center];
     }
     [self.window makeKeyAndOrderFront:nil];
@@ -54,6 +59,8 @@ static IMP MbsSendActionOriginal;
 static BOOL MbsSendAction(id self, SEL selector, SEL action, id target, id sender) {
     if ([sender isKindOfClass:NSMenuItem.class]) {
         NSString *title = [(NSMenuItem *)sender title];
+        if ([title isEqualToString:@"软件更新…"] || [title isEqualToString:@"软件更新..."] ||
+            [title isEqualToString:@"Software Update…"]) { MbsShowUpdates(); return YES; }
         if ([title isEqualToString:@"关于 Mbs Office"] || [title isEqualToString:@"关于Mbs Office"] ||
             [title isEqualToString:@"About Mbs Office"]) { MbsShowAbout(); return YES; }
     }

@@ -269,12 +269,12 @@ static NSURL *MbsInstallerURL(NSBundle *outer)
     self.window.title = @"Mbs Office 版本升级";
     self.window.releasedWhenClosed = NO;
     [self.window center];
-    [self label:@"Mbs Office 自研模块更新" frame:NSMakeRect(24,290,532,26)].font = [NSFont boldSystemFontOfSize:19];
+    [self label:@"Mbs Office 软件更新" frame:NSMakeRect(24,290,532,26)].font = [NSFont boldSystemFontOfSize:19];
     self.currentLabel = [self label:[NSString stringWithFormat:@"当前版本：%@",self.currentVersion ?: @"无法读取"]
         frame:NSMakeRect(24,252,260,22)];
     self.latestLabel = [self label:@"最新版本：尚未检查" frame:NSMakeRect(294,252,262,22)];
     self.statusLabel = [self label:@"尚未检查更新。" frame:NSMakeRect(24,174,532,64)];
-    [self label:@"此处仅更新 Mbs 自研模块。下载完成后会正常退出应用，按提示保存文档后自动安装并重启。"
+    [self label:@"下载完成后，请按提示保存文档并退出。程序将自动完成安装并重新启动。"
         frame:NSMakeRect(24,71,532,40)].textColor = NSColor.secondaryLabelColor;
     self.progress = [[NSProgressIndicator alloc] initWithFrame:NSMakeRect(24,134,532,16)];
     self.progress.style = NSProgressIndicatorStyleBar;
@@ -357,11 +357,13 @@ static NSURL *MbsInstallerURL(NSBundle *outer)
                 return;
             }
             NSString *version = MbsVersion(release[@"tag_name"],YES);
-            self.latestLabel.stringValue = [NSString stringWithFormat:@"最新版本：%@",version ?: @"暂无适配版本"];
+            BOOL older=version && MbsCompareVersions(version,self.currentVersion)==NSOrderedAscending;
+            self.latestLabel.stringValue = [NSString stringWithFormat:@"%@：%@",older ? @"公开版本" : @"最新版本",version ?: @"暂无适配版本"];
             self.candidate = MbsUpdateCandidate(release,self.currentVersion);
             self.statusLabel.stringValue = self.candidate ?
-                [NSString stringWithFormat:@"发现自研模块更新 %@。点击“版本升级”下载并校验。",self.candidate[@"version"]] :
-                @"当前无可用更新。发布版本需包含匹配的自研模块包和校验信息。";
+                [NSString stringWithFormat:@"发现新版本 %@。点击“版本升级”下载安装。",self.candidate[@"version"]] :
+                (older ? @"当前版本高于公开版本，无需降级。" :
+                 (version && MbsCompareVersions(version,self.currentVersion)==NSOrderedSame ? @"当前已是最新版本。" : @"当前没有适用于本版本的更新，请稍后重试。"));
         }
         self.progress.hidden = YES;
         self.upgradeButton.title = @"版本升级";

@@ -23,6 +23,8 @@ static OSStatus TestAdd(CFDictionaryRef attributes,CFTypeRef *) {
 #define MBS_AI_TEST 1
 #import "../src/MbsAiPanel.mm"
 #import "../src/MbsAbout.mm"
+void MbsShowStartupRepair(void) {}
+extern "C" void MbsShowUpdates(void) {}
 static NSUInteger requests, imageRequests;
 static NSString *testEndpoint=@"https://ai.example.invalid/v1";
 static NSString *responseText=@"模拟文本结果";

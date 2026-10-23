@@ -11,4 +11,5 @@ clang++ -target arm64-apple-macos13.0 -std=c++17 -dynamiclib \
   -undefined dynamic_lookup -Wno-nullability-completeness -Wno-deprecated-declarations \
   -Wl,-sectcreate,__TEXT,__mbs_art,assets/mbs-ai-assistant.png \
   -Wl,-sectcreate,__TEXT,__mbs_brand,build/mbs-wordmark.rcc \
+  -Wl,-sectcreate,__TEXT,__mbs_repair,assets/mbs-startup-repair.png \
   -o build/MbsOfflineFlags.dylib
