@@ -1,6 +1,7 @@
 #import <AppKit/AppKit.h>
 #import "MbsNativeLoginRecovery.h"
 #import "MbsStartupRouting.h"
+#import "MbsAccountEntry.h"
 #import <objc/runtime.h>
 #include <dlfcn.h>
 #include <mach-o/getsect.h>
@@ -9,22 +10,47 @@ static unsigned MbsStartupRoutes;
 static BOOL MbsRecoveringLegacyWindow;
 static NSDate *MbsLastStartupRecovery;
 static unsigned MbsQuietStartupKinds;
+static NSUserDefaults *MbsRecoveryPreferences;
+static CFRunLoopTimerRef MbsAutomaticRecoveryTimer;
+static BOOL MbsInitialStartupRecovery=YES;
+static NSString *const MbsRecoveryEnabledKey=@"MbsStartupRecoveryEnabled";
+static NSString *const MbsRecoveryValueKey=@"MbsStartupRecoveryIntervalValue";
+static NSString *const MbsRecoveryUnitKey=@"MbsStartupRecoveryIntervalUnit";
+static NSString *const MbsRecoveryLastKey=@"MbsStartupRecoveryLastSuccess";
+static NSUserDefaults *MbsRecoveryDefaults(void) {
+    if (!MbsRecoveryPreferences) MbsRecoveryPreferences=NSUserDefaults.standardUserDefaults;
+    [MbsRecoveryPreferences registerDefaults:@{MbsRecoveryEnabledKey:@YES,
+        MbsRecoveryValueKey:@3,MbsRecoveryUnitKey:@1}];
+    return MbsRecoveryPreferences;
+}
+static NSTimeInterval MbsRecoveryInterval(NSInteger value, NSInteger unit) {
+    if (value<1 || value>NSIntegerMax/86400 || unit<0 || unit>2) return 0;
+    const NSTimeInterval seconds[]={86400,3600,60};
+    return value*seconds[unit];
+}
+static NSTimeInterval MbsSavedRecoveryInterval(void) {
+    NSUserDefaults *preferences=MbsRecoveryDefaults();
+    NSTimeInterval interval=MbsRecoveryInterval([preferences integerForKey:MbsRecoveryValueKey],
+        [preferences integerForKey:MbsRecoveryUnitKey]);
+    return interval ?: 3*3600;
+}
+static BOOL MbsAutomaticRecoveryDue(NSDate *now) {
+    NSUserDefaults *preferences=MbsRecoveryDefaults();
+    if (![preferences boolForKey:MbsRecoveryEnabledKey]) return NO;
+    if (MbsInitialStartupRecovery) return YES;
+    NSDate *last=[preferences objectForKey:MbsRecoveryLastKey];
+    return ![last isKindOfClass:NSDate.class] || [now timeIntervalSinceDate:last]>=MbsSavedRecoveryInterval();
+}
+static void MbsConfigureAutomaticRecovery(void);
+
 extern "C" unsigned MbsLegacyQuietStartupKinds(void) { return MbsQuietStartupKinds; }
 
 // Keep the real Qt window and its completion action alive. Only its old
 // presentation is quiet; a raw close would skip the startup callback.
-static char MbsLegacyLoadingSince;
+static char MbsLegacyAccountRequested, MbsLegacyCompletionQueued;
+static void MbsScheduleLegacyCompletion(NSWindow *window);
 static BOOL MbsIsQuietLegacyWindow(NSWindow *window) {
-    if ([window.title isEqualToString:@"账号登录"]) {
-        NSDate *since=objc_getAssociatedObject(window,&MbsLegacyLoadingSince);
-        if (!since) {
-            since=NSDate.date;
-            objc_setAssociatedObject(window,&MbsLegacyLoadingSince,since,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-        }
-        // Keep loading quiet, but never strand a working login as an
-        // invisible modal if the old service unexpectedly becomes available.
-        return MbsFailedNativeLoginAction(window)!=nil || -since.timeIntervalSinceNow<10;
-    }
+    if ([window.title isEqualToString:@"账号登录"]) return YES;
     NSSize size=window.frame.size;
     return !window.title.length && !(window.styleMask & NSWindowStyleMaskTitled) &&
         size.width<=850 && size.height<=120 && MbsHasLegacyCloudNotice(window);
@@ -45,12 +71,18 @@ static void MbsApplyQuietPresentation(NSWindow *window) {
 static void MbsQuietWindowTitle(id window,SEL action,NSString *title) {
     ((void (*)(id,SEL,id))MbsOriginalWindowTitle)(window,action,title);
     MbsApplyQuietPresentation(window);
+    MbsScheduleLegacyCompletion(window);
 }
 static void MbsQuietWindowOrder(id window,SEL action,NSWindowOrderingMode mode,NSInteger other) {
-    if (mode!=NSWindowOut && ![window isVisible] && [[window title] isEqualToString:@"账号登录"])
-        objc_setAssociatedObject(window,&MbsLegacyLoadingSince,NSDate.date,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    if (mode!=NSWindowOut && ![window isVisible] && [[window title] isEqualToString:@"账号登录"]) {
+        NSEvent *event=NSApp.currentEvent;
+        if ((event.type==NSEventTypeLeftMouseUp || event.type==NSEventTypeKeyDown) &&
+            NSProcessInfo.processInfo.systemUptime-event.timestamp<1)
+            objc_setAssociatedObject(window,&MbsLegacyAccountRequested,@YES,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
     if (mode!=NSWindowOut) MbsApplyQuietPresentation(window);
     ((void (*)(id,SEL,NSWindowOrderingMode,NSInteger))MbsOriginalWindowOrder)(window,action,mode,other);
+    if (mode!=NSWindowOut) MbsScheduleLegacyCompletion(window);
 }
 static void MbsQuietWindowAlpha(id window,SEL action,CGFloat alpha) {
     if (MbsIsQuietLegacyWindow(window)) {
@@ -61,9 +93,9 @@ static void MbsQuietWindowAlpha(id window,SEL action,CGFloat alpha) {
     ((void (*)(id,SEL,CGFloat))MbsOriginalWindowAlpha)(window,action,alpha);
 }
 static void MbsQuietWindowKey(id window,SEL action) {
-    if (![window isVisible] && [[window title] isEqualToString:@"账号登录"])
-        objc_setAssociatedObject(window,&MbsLegacyLoadingSince,NSDate.date,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    if (MbsIsQuietLegacyWindow(window)) { MbsApplyQuietPresentation(window); return; }
+    if (MbsIsQuietLegacyWindow(window)) {
+        MbsApplyQuietPresentation(window); MbsScheduleLegacyCompletion(window); return;
+    }
     ((void (*)(id,SEL))MbsOriginalWindowKey)(window,action);
 }
 static void MbsInstallQuietPresentation(void) {
@@ -83,11 +115,11 @@ extern "C" unsigned MbsLegacyStartupPromptCount(void) {
     return __atomic_load_n(&MbsStartupRoutes,__ATOMIC_RELAXED);
 }
 
-static BOOL MbsRecoverFailedLogin(NSWindow *window) {
+static BOOL MbsRecoverFailedLogin(NSWindow *window, BOOL recordRecovery=YES) {
     if (!NSThread.isMainThread || MbsRecoveringLegacyWindow || !window.isVisible ||
         ![window.title isEqualToString:@"账号登录"]) return NO;
     MbsRecoveringLegacyWindow = YES;
-    id later = MbsFailedNativeLoginAction(window);
+    id later = MbsNativeLoginLaterAction(window,NO);
     BOOL handled = NO;
     if ([later respondsToSelector:@selector(accessibilityPerformAction:)]) {
         [later accessibilityPerformAction:NSAccessibilityPressAction];
@@ -97,10 +129,72 @@ static BOOL MbsRecoverFailedLogin(NSWindow *window) {
     }
     MbsRecoveringLegacyWindow = NO;
     if (handled) {
-        __atomic_add_fetch(&MbsStartupRoutes,1,__ATOMIC_RELAXED);
-        MbsLastStartupRecovery=NSDate.date;
+        MbsInitialStartupRecovery=NO;
+        if ([objc_getAssociatedObject(window,&MbsLegacyAccountRequested) boolValue]) {
+            objc_setAssociatedObject(window,&MbsLegacyAccountRequested,nil,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            dispatch_async(dispatch_get_main_queue(),^{ MbsOpenAccountEntry(); });
+        }
+        if (recordRecovery) {
+            __atomic_add_fetch(&MbsStartupRoutes,1,__ATOMIC_RELAXED);
+            MbsLastStartupRecovery=NSDate.date;
+            [MbsRecoveryDefaults() setObject:MbsLastStartupRecovery forKey:MbsRecoveryLastKey];
+            if (MbsAutomaticRecoveryTimer) CFRunLoopTimerSetNextFireDate(MbsAutomaticRecoveryTimer,
+                CFAbsoluteTimeGetCurrent()+MbsSavedRecoveryInterval());
+        }
     }
     return handled;
+}
+
+// Finishing an obsolete modal is required to keep the editor interactive.
+// It is separate from the optional timed repair and never opens the old page.
+static void MbsRunLegacyCompletion(NSWindow *window) {
+    if (window.isVisible && [window.title isEqualToString:@"账号登录"])
+        MbsRecoverFailedLogin(window,MbsAutomaticRecoveryDue(NSDate.date));
+    if (window.isVisible && [window.title isEqualToString:@"账号登录"]) {
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW,2*NSEC_PER_SEC),dispatch_get_main_queue(),^{
+            MbsRunLegacyCompletion(window);
+        });
+    } else objc_setAssociatedObject(window,&MbsLegacyCompletionQueued,nil,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+}
+static void MbsScheduleLegacyCompletion(NSWindow *window) {
+    if (![window.title isEqualToString:@"账号登录"] ||
+        [objc_getAssociatedObject(window,&MbsLegacyCompletionQueued) boolValue]) return;
+    objc_setAssociatedObject(window,&MbsLegacyCompletionQueued,@YES,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    dispatch_async(dispatch_get_main_queue(),^{ MbsRunLegacyCompletion(window); });
+}
+
+static BOOL MbsRecoverAutomatically(NSWindow *window) {
+    if (!MbsAutomaticRecoveryDue(NSDate.date)) return NO;
+    BOOL recovered=MbsRecoverFailedLogin(window);
+    // The first error page may finish loading after the initial timer fires.
+    // Wait only for that visible login; after success the saved interval applies.
+    if (!recovered && window.isVisible && [window.title isEqualToString:@"账号登录"] && MbsAutomaticRecoveryTimer) {
+        CFAbsoluteTime retry=CFAbsoluteTimeGetCurrent()+2;
+        if (CFRunLoopTimerGetNextFireDate(MbsAutomaticRecoveryTimer)>retry)
+            CFRunLoopTimerSetNextFireDate(MbsAutomaticRecoveryTimer,retry);
+    }
+    return recovered;
+}
+static void MbsConfigureAutomaticRecovery(void) {
+    if (MbsAutomaticRecoveryTimer) {
+        CFRunLoopTimerInvalidate(MbsAutomaticRecoveryTimer);
+        CFRelease(MbsAutomaticRecoveryTimer); MbsAutomaticRecoveryTimer=NULL;
+    }
+    if (![MbsRecoveryDefaults() boolForKey:MbsRecoveryEnabledKey]) return;
+    NSTimeInterval interval=MbsSavedRecoveryInterval();
+    NSDate *last=[MbsRecoveryDefaults() objectForKey:MbsRecoveryLastKey];
+    NSTimeInterval delay=!MbsInitialStartupRecovery && [last isKindOfClass:NSDate.class] ?
+        MAX(0.5,interval+last.timeIntervalSinceNow) : 0.5;
+    MbsAutomaticRecoveryTimer=CFRunLoopTimerCreateWithHandler(kCFAllocatorDefault,
+        CFAbsoluteTimeGetCurrent()+delay,interval,0,0,^(CFRunLoopTimerRef timer) {
+            for (NSWindow *window in NSApp.windows.copy) {
+                MbsApplyQuietPresentation(window);
+                MbsRecoverAutomatically(window);
+            }
+            if (MbsInitialStartupRecovery && MbsAutomaticRecoveryDue(NSDate.date))
+                CFRunLoopTimerSetNextFireDate(timer,CFAbsoluteTimeGetCurrent()+2);
+        });
+    CFRunLoopAddTimer(CFRunLoopGetMain(),MbsAutomaticRecoveryTimer,kCFRunLoopCommonModes);
 }
 
 @interface MbsStartupRepairController : NSObject
@@ -115,6 +209,8 @@ static BOOL MbsRecoverFailedLogin(NSWindow *window) {
     static MbsStartupRepairController *value; static dispatch_once_t once;
     dispatch_once(&once, ^{ value=[MbsStartupRepairController new]; }); return value;
 }
+- (BOOL)validateMenuItem:(NSMenuItem *)item { return YES; }
+- (BOOL)worksWhenModal { return YES; }
 - (void)openService:(id)sender {
     [NSWorkspace.sharedWorkspace openURL:[NSURL URLWithString:@"https://ttys.ddxmu.com/"]];
 }
@@ -148,17 +244,47 @@ static BOOL MbsRecoverFailedLogin(NSWindow *window) {
     alert.messageText=@"修复启动回调";
     if (recovered) {
         alert.informativeText=@"已执行启动恢复回调，请返回文档检查工具栏。";
-        [alert addButtonWithTitle:@"好"]; [alert runModal]; return;
-    }
-    alert.informativeText=@"自动回调恢复已启用。若工具栏仍为灰色，可保存文档并正常重启，重新完成启动流程。退出时仍会提示保存未保存的文档。";
+    } else alert.informativeText=@"当前没有待处理的失败回调。点击首页刷新按钮仍可手动修复；若工具栏仍为灰色，可保存文档并正常重启。";
     if (MbsLastStartupRecovery) {
         NSDateFormatter *format=[NSDateFormatter new]; format.dateFormat=@"HH:mm:ss";
-        alert.informativeText=[NSString stringWithFormat:@"本次启动已在后台完成 %u 次恢复回调，最近一次：%@。若工具栏仍为灰色，可保存文档并正常重启修复。",
+        alert.informativeText=[NSString stringWithFormat:@"本次启动已完成 %u 次恢复回调，最近一次：%@。若工具栏仍为灰色，可保存文档并正常重启修复。",
             MbsLegacyStartupPromptCount(),[format stringFromDate:MbsLastStartupRecovery]];
     }
+    NSView *settings=[[NSView alloc] initWithFrame:NSMakeRect(0,0,370,142)];
+    NSButton *automatic=[NSButton checkboxWithTitle:@"启用自动回调" target:nil action:nil];
+    automatic.frame=NSMakeRect(0,110,350,24);
+    automatic.state=[MbsRecoveryDefaults() boolForKey:MbsRecoveryEnabledKey] ? NSControlStateValueOn : NSControlStateValueOff;
+    [settings addSubview:automatic];
+    NSTextField *label=[NSTextField labelWithString:@"回调间隔"]; label.frame=NSMakeRect(0,75,80,22);
+    [settings addSubview:label];
+    NSTextField *value=[[NSTextField alloc] initWithFrame:NSMakeRect(86,72,110,26)];
+    value.stringValue=[NSString stringWithFormat:@"%ld",(long)[MbsRecoveryDefaults() integerForKey:MbsRecoveryValueKey]];
+    value.accessibilityLabel=@"回调间隔数值"; [settings addSubview:value];
+    NSPopUpButton *unit=[[NSPopUpButton alloc] initWithFrame:NSMakeRect(206,71,100,28) pullsDown:NO];
+    [unit addItemsWithTitles:@[@"天",@"小时",@"分钟"]];
+    [unit selectItemAtIndex:[MbsRecoveryDefaults() integerForKey:MbsRecoveryUnitKey]];
+    unit.accessibilityLabel=@"回调时间单位"; [settings addSubview:unit];
+    NSTextField *hint=[NSTextField wrappingLabelWithString:@"启用时先完成本次启动恢复，之后默认每 3 小时一次。关闭后仅手动修复；旧登录页仍会静默关闭。设置重启后保留。"];
+    hint.frame=NSMakeRect(0,2,370,60); hint.textColor=NSColor.secondaryLabelColor;
+    [settings addSubview:hint]; alert.accessoryView=settings;
+    [alert addButtonWithTitle:@"保存设置"];
     [alert addButtonWithTitle:@"保存并重启修复"];
     [alert addButtonWithTitle:@"取消"];
-    if ([alert runModal]!=NSAlertFirstButtonReturn) return;
+    NSModalResponse response;
+    while ((response=[alert runModal])==NSAlertFirstButtonReturn) {
+        long long quantity=0; NSScanner *scanner=[NSScanner scannerWithString:value.stringValue];
+        if (![scanner scanLongLong:&quantity] || !scanner.isAtEnd ||
+            !MbsRecoveryInterval(quantity,unit.indexOfSelectedItem)) {
+            hint.stringValue=@"请输入大于 0 的整数，并选择天、小时或分钟。";
+            hint.textColor=NSColor.systemRedColor; continue;
+        }
+        [MbsRecoveryDefaults() setBool:automatic.state==NSControlStateValueOn forKey:MbsRecoveryEnabledKey];
+        [MbsRecoveryDefaults() setInteger:quantity forKey:MbsRecoveryValueKey];
+        [MbsRecoveryDefaults() setInteger:unit.indexOfSelectedItem forKey:MbsRecoveryUnitKey];
+        [MbsRecoveryDefaults() synchronize];
+        MbsConfigureAutomaticRecovery(); return;
+    }
+    if (response!=NSAlertSecondButtonReturn) return;
     // The Qt host can exit without NSApplicationWillTerminateNotification.
     // Start the waiter before asking it to quit, and cancel the waiter if
     // terminate: returns (for example, when a document save was cancelled).
@@ -195,7 +321,9 @@ void MbsShowStartupRepair(void) {
 }
 static void MbsInstallRepairMenu(void) {
     NSMenu *help=[NSApp.mainMenu itemWithTitle:@"帮助"].submenu;
-    if (!help || [help itemWithTitle:@"修复启动回调…"]) return;
+    if (!help) return;
+    NSMenuItem *existing=[help itemWithTitle:@"修复启动回调…"];
+    if (existing) { existing.enabled=YES; return; }
     NSMenuItem *item=[[NSMenuItem alloc] initWithTitle:@"修复启动回调…" action:@selector(repair:) keyEquivalent:@""];
     item.target=MbsStartupRepairController.shared;
     [help addItem:item];
@@ -245,26 +373,20 @@ static void MbsInstallHomeRepairButton(NSWindow *window) {
 __attribute__((constructor)) static void MbsInstallStartupRouting(void) {
     MbsInstallQuietPresentation();
     // Closing the Cocoa window skips the editor's Later-login completion.
-    // Recover only a failed page through its existing action; leave a working
-    // native login, document windows and Mbs account panels untouched.
+    // Complete only the obsolete native login through its existing Later action;
+    // document windows and the Mbs account panel keep their own lifecycle.
     for (NSNotificationName name in @[NSWindowDidBecomeKeyNotification, NSWindowDidUpdateNotification]) {
         [NSNotificationCenter.defaultCenter addObserverForName:name object:nil queue:nil
             usingBlock:^(NSNotification *note) {
                 MbsApplyQuietPresentation(note.object);
-                MbsRecoverFailedLogin(note.object);
+                MbsScheduleLegacyCompletion(note.object);
                 MbsInstallHomeRepairButton(note.object);
+                MbsInstallRepairMenu();
             }];
     }
-    // A native login can run a nested event loop before app launch completes.
-    CFRunLoopTimerRef timer = CFRunLoopTimerCreateWithHandler(kCFAllocatorDefault,
-        CFAbsoluteTimeGetCurrent()+0.5, 0.5, 0, 0, ^(CFRunLoopTimerRef) {
-            for (NSWindow *window in NSApp.windows) {
-                MbsApplyQuietPresentation(window);
-                MbsRecoverFailedLogin(window);
-            }
-        });
-    CFRunLoopAddTimer(CFRunLoopGetMain(), timer, kCFRunLoopCommonModes);
-    CFRelease(timer);
+    // The common-mode timer also runs during the native login's nested loop.
+    // Successful callbacks share one persisted cooldown with window events.
+    MbsConfigureAutomaticRecovery();
     for (NSNotificationName name in @[NSApplicationDidFinishLaunchingNotification, NSWindowDidBecomeKeyNotification]) {
         [NSNotificationCenter.defaultCenter addObserverForName:name object:nil queue:nil usingBlock:^(NSNotification *note) {
             dispatch_async(dispatch_get_main_queue(), ^{

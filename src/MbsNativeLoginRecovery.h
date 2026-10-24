@@ -25,7 +25,7 @@ static BOOL MbsHasLegacyCloudNotice(id root) {
 }
 
 // A normal online login must not be cancelled merely because it offers Later.
-static id MbsFailedNativeLoginAction(id root) {
+static id MbsNativeLoginLaterAction(id root, BOOL requireFailure) {
     NSMutableArray *pending = [NSMutableArray arrayWithObject:root];
     id later = nil;
     BOOL failed = NO;
@@ -49,5 +49,8 @@ static id MbsFailedNativeLoginAction(id root) {
         if (!children.count) children = MbsNativeAccessibilityValue(item,NSAccessibilityChildrenAttribute);
         if ([children isKindOfClass:NSArray.class]) [pending addObjectsFromArray:children];
     }
-    return failed ? later : nil;
+    return !requireFailure || failed ? later : nil;
+}
+static id MbsFailedNativeLoginAction(id root) {
+    return MbsNativeLoginLaterAction(root,YES);
 }
