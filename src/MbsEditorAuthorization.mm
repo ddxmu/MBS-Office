@@ -201,10 +201,15 @@ static NSArray *MbsNativeAuthorizationStates(void) {
     BOOL accepted = native.count == 3;
     auto quietKinds=(unsigned (*)())dlsym(RTLD_DEFAULT,"MbsLegacyQuietStartupKinds");
     unsigned quiet=quietKinds ? quietKinds() : 0;
+    auto nativeState=(char *(*)())dlsym(RTLD_DEFAULT,"MbsCopyNativeAuthorizationDiagnostics");
+    char *nativeStateText=nativeState ? nativeState() : nullptr;
+    NSDictionary *bridge=nativeStateText ? [NSJSONSerialization JSONObjectWithData:
+        [[NSString stringWithUTF8String:nativeStateText] dataUsingEncoding:NSUTF8StringEncoding] options:0 error:nil] : nil;
+    free(nativeStateText);
     for (NSDictionary *state in native) accepted = accepted && [state[@"accepted"] boolValue] && [state[@"level"] intValue] >= 2;
     NSDictionary *receipt = @{@"verified":@(verified),@"nativeAccepted":@(accepted),@"nativeManagers":native,
         @"activation":verified && self.activation ? self.activation : (id)NSNull.null,
-        @"activationState":self.activationState ?: @"unknown",
+        @"activationState":self.activationState ?: @"unknown",@"nativeStateBridge":bridge ?: @{},
         @"legacyKeychainReadsDeclined":@(MbsLegacyKeychainDenialCount()),
         @"busy":@(self.task != nil),@"startupRoutes":@(MbsStartupRouteCount()),
         @"quietedLegacyLogin":@((quiet&1)!=0),@"quietedLegacyCloudNotice":@((quiet&2)!=0),

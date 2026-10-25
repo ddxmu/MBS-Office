@@ -16,9 +16,15 @@ p.add_argument('--from-version', required=True)
 p.add_argument('--full-only', action='store_true', help='Stage the complete app without creating a module-only update')
 p.add_argument('--authorization-base-library', type=Path,
                help='Audited original libauth used to build the website-only manager adapter; requires --full-only')
+p.add_argument('--native-state-routing',action='store_true',
+               help='Route the inspected original login/trial/license state methods to Mbs')
+p.add_argument('--account-authorization-base-library',type=Path,
+               help='Audited original ksolite used to route native account login/logout and authorization queries')
 args = p.parse_args()
-if args.authorization_base_library and not args.full_only:
+if (args.authorization_base_library or args.account_authorization_base_library) and not args.full_only:
     p.error('Native authorization changes require --full-only; a module-only update cannot apply them.')
+if args.native_state_routing and not (args.authorization_base_library and args.account_authorization_base_library):
+    p.error('Native state routing requires both audited authorization and account base libraries.')
 repo = Path(__file__).resolve().parent.parent
 version = (repo/'VERSION').read_text().strip()
 assert not args.work.exists(), 'Use a new release work directory'
@@ -41,12 +47,21 @@ outer['CFBundleVersion'] = str(int(outer['CFBundleVersion'])+1)
 engine = app/'Contents/Resources/MbsEngine.app'
 if args.authorization_base_library:
     adapter = args.work/'libauth-website.dylib'
-    subprocess.run(['python3',str(repo/'scripts/patch-editor-authorization.py'),
+    command = ['python3',str(repo/'scripts/patch-editor-authorization.py'),
                     '--input',str(args.authorization_base_library),'--output',str(adapter),
-                    '--exclusive-manager-checks'],check=True)
+                    '--exclusive-manager-checks']
+    if args.native_state_routing: command.append('--native-state-routing')
+    subprocess.run(command,check=True)
     library = engine/'Contents/Frameworks/office6/libauth.dylib'
     shutil.copy2(adapter,library)
     subprocess.run(['codesign','--force','--sign','-',str(library)],check=True)
+if args.account_authorization_base_library:
+    adapter = args.work/'ksolite-website'
+    subprocess.run(['python3',str(repo/'scripts/patch-account-authorization.py'),
+                    '--input',str(args.account_authorization_base_library),'--output',str(adapter)],check=True)
+    library = engine/'Contents/Frameworks/office6/ksolite.framework/Versions/A/ksolite'
+    shutil.copy2(adapter,library)
+    subprocess.run(['codesign','--force','--sign','-',str(library.parent.parent.parent)],check=True)
 subprocess.run(['python3',str(repo/'scripts/refresh-branding.py'),str(app)],check=True)
 res = 'Contents/Resources/MbsEngine.app/Contents/Resources/office6/res/'
 ribbon_paths = [res+'wppongmani.kui',res+'commands/wpp/ongmani/CT_MbsAI.kuip']
