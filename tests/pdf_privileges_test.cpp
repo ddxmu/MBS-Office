@@ -29,7 +29,9 @@ int main() {
     data.items[0] = &edit; assert(mbsPdfPrivilege(nullptr,list));
     data.items[0] = &picture; assert(mbsPdfPrivilege(nullptr,list));
     data.items[0] = &stamp; assert(mbsPdfPrivilege(nullptr,list));
-    active = false; assert(!mbsPdfPrivilege(nullptr,list) && nativeCalls == 1);
+    active = false; nativeResult = true;
+    assert(!mbsPdfPrivilege(nullptr,list) && nativeCalls == 0);
+    nativeResult = false;
     active = true; nativeCalls = 0;
     data.begin = 1; data.end = 3; data.items[1] = &edit; data.items[2] = &text;
     assert(mbsPdfPrivilege(nullptr,list));
@@ -39,8 +41,8 @@ int main() {
     nativeResult = true;
     assert(mbsPdfPrivilege(nullptr,list) && nativeCalls == 2);
     nativeResult = false; active = false; data.items[2] = &text;
-    assert(!mbsPdfPrivilege(nullptr,list) && nativeCalls == 3);
+    assert(!mbsPdfPrivilege(nullptr,list) && nativeCalls == 2);
     active = true; data.end = data.begin;
-    assert(!mbsPdfPrivilege(nullptr,list) && nativeCalls == 4);
-    puts("PASS: PDF editing and stamps only; active grant required; mixed, empty and native permissions preserved");
+    assert(!mbsPdfPrivilege(nullptr,list) && nativeCalls == 3);
+    puts("PASS: PDF editing and stamps use only Mbs authorization, inactive Mbs cannot fall back to native rights, unrelated permissions unchanged");
 }

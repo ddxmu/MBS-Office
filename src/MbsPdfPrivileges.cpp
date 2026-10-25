@@ -35,7 +35,7 @@ static bool pdfEditingPrivileges(const kso_qt::QStringList &privileges)
 
 static bool mbsPdfPrivilege(const void *user, const kso_qt::QStringList &privileges)
 {
-    if (pdfEditingPrivileges(privileges) && MbsHasVerifiedEditorLicense()) return true;
+    if (pdfEditingPrivileges(privileges)) return MbsHasVerifiedEditorLicense();
     return nativePdfPrivilege(user, privileges);
 }
 

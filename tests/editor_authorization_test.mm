@@ -32,11 +32,19 @@ int main(void) { @autoreleasepool {
     };
     NSData *envelope = sign(valid);
     NSCAssert(MbsVerifyEditorGrant(envelope,publicBytes,nonce,email,device,session,now),@"valid grant");
+    NSCAssert(!MbsEditorGrantAllowsEditing(valid),@"signed account response alone must not enable editing");
     NSMutableDictionary *activated = [valid mutableCopy];
     activated[@"activation"] = @{@"id":@1,@"plan":@"vip",@"expiresAt":@(now+86400),@"maxDevices":@1,@"deviceId":device};
     NSCAssert(MbsVerifyEditorGrant(sign(activated),publicBytes,nonce,email,device,session,now),@"signed activation grant");
+    NSCAssert(MbsEditorGrantAllowsEditing(activated),@"legacy redeem response with bound activation remains supported");
     activated[@"activationState"] = @"active";
     NSCAssert(MbsVerifyEditorGrant(sign(activated),publicBytes,nonce,email,device,session,now),@"signed active state");
+    NSCAssert(MbsEditorGrantAllowsEditing(activated),@"active Mbs license allows editing");
+    for (NSString *state in @[@"expired",@"revoked",@"device_limit"]) {
+        NSMutableDictionary *inactive=[valid mutableCopy]; inactive[@"activationState"]=state;
+        NSDictionary *verified=MbsVerifyEditorGrant(sign(inactive),publicBytes,nonce,email,device,session,now);
+        NSCAssert(verified && !MbsEditorGrantAllowsEditing(verified),@"signed inactive status cannot authorize editing");
+    }
     for (NSString *state in @[@"expired",@"revoked",@"device_limit",@"unknown"]) {
         NSMutableDictionary *changed=[activated mutableCopy]; changed[@"activationState"]=state;
         NSCAssert(!MbsVerifyEditorGrant(sign(changed),publicBytes,nonce,email,device,session,now),@"reject inconsistent activation state");

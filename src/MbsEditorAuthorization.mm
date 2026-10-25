@@ -80,6 +80,13 @@ NSDictionary *MbsVerifyEditorGrant(NSData *response, NSData *publicKey,
     return claims;
 }
 
+bool MbsEditorGrantAllowsEditing(NSDictionary *claims) {
+    // A signed account/status response is not itself an active editor license.
+    // Older redeem responses include activation metadata without activationState.
+    return [claims[@"activation"] isKindOfClass:NSDictionary.class] &&
+        (!claims[@"activationState"] || [claims[@"activationState"] isEqual:@"active"]);
+}
+
 // The grant is bound to this private installation ID and current Mbs session.
 static int MbsGrantDirectory(void) {
 #ifdef MBS_EDITOR_AUTH_TESTS
@@ -167,10 +174,12 @@ static NSArray *MbsNativeAuthorizationStates(void) {
 @property NSURLSession *session;
 @property NSURLSessionDataTask *task;
 @property NSTimer *timer;
+@property NSTimer *expiryTimer;
 @property NSUInteger generation;
 + (instancetype)shared;
 - (void)request;
 - (void)requestWithActivationCode:(NSString *)code;
+- (void)acceptVerifiedGrant:(NSDictionary *)claims response:(NSData *)data;
 @end
 @implementation MbsEditorAuthorization
 + (instancetype)shared {
@@ -180,6 +189,14 @@ static NSArray *MbsNativeAuthorizationStates(void) {
 }
 - (void)notify {
     BOOL verified = MbsHasVerifiedEditorLicense();
+    [self.expiryTimer invalidate]; self.expiryTimer = nil;
+    if (!verified && [self.activationState isEqual:@"active"]) {
+        self.activationState = @"expired";
+        self.status = @"授权已到期，请重新激活";
+    }
+    if (verified) self.expiryTimer = [NSTimer scheduledTimerWithTimeInterval:
+        MAX(0.01,MbsGetGrantExpiry()-NSDate.date.timeIntervalSince1970) repeats:NO
+        block:^(NSTimer *timer) { [self notify]; }];
     NSArray *native = verified ? MbsNativeAuthorizationStates() : @[];
     BOOL accepted = native.count == 3;
     auto quietKinds=(unsigned (*)())dlsym(RTLD_DEFAULT,"MbsLegacyQuietStartupKinds");
@@ -199,6 +216,25 @@ static NSArray *MbsNativeAuthorizationStates(void) {
 }
 - (void)request {
     [self requestWithActivationCode:nil];
+}
+- (void)acceptVerifiedGrant:(NSDictionary *)claims response:(NSData *)data {
+    // Only call after signature and account/device/session binding verification.
+    // A verified revocation must take effect even when persistence fails.
+    BOOL saved = MbsWriteGrantFile("editor-license.json",data);
+    MbsSetGrantExpiry(saved && MbsEditorGrantAllowsEditing(claims) ? [claims[@"expiresAt"] doubleValue] : 0);
+    self.activation = claims[@"activation"];
+    self.activationState = claims[@"activationState"] ?: (self.activation ? @"active" : @"unknown");
+    self.status = self.activation ? @"授权码已激活" : @"账号已验证，尚无有效编辑授权";
+    if ([self.activationState isEqual:@"expired"]) self.status = @"授权已到期，请重新激活";
+    if ([self.activationState isEqual:@"revoked"]) self.status = @"授权已撤销，请使用新授权码";
+    if ([self.activationState isEqual:@"device_limit"]) self.status = @"授权设备已达上限，请联系管理员";
+    if (!saved) {
+        int dir = MbsGrantDirectory(); if (dir >= 0) { unlinkat(dir,"editor-license.json",0); close(dir); }
+        if (MbsEditorGrantAllowsEditing(claims)) {
+            self.activation = nil; self.activationState = nil;
+            self.status = @"授权未保存，请检查本机存储后重试";
+        }
+    }
 }
 - (void)requestWithActivationCode:(NSString *)activationCode {
     if (self.task || !self.token.length || !self.device.length) return;
@@ -228,17 +264,8 @@ static NSArray *MbsNativeAuthorizationStates(void) {
         NSInteger code = [response isKindOfClass:NSHTTPURLResponse.class] ? [(NSHTTPURLResponse *)response statusCode] : 0;
         BOOL correctURL = [response.URL.absoluteString isEqual:request.URL.absoluteString];
         NSDictionary *claims = !error && code == 200 && correctURL ? MbsVerifyEditorGrant(data,MbsPinnedGrantKey(),nonce,email,device,sessionHash,NSDate.date.timeIntervalSince1970) : nil;
-        if (claims && MbsWriteGrantFile("editor-license.json",data)) {
-            MbsSetGrantExpiry([claims[@"expiresAt"] doubleValue]);
-            self.activation = claims[@"activation"];
-            self.activationState = claims[@"activationState"] ?: (self.activation ? @"active" : @"unknown");
-            self.status = self.activation ? @"授权码已激活" : @"Mbs 授权已验证";
-            if ([self.activationState isEqual:@"expired"]) self.status = @"授权已到期，请重新激活";
-            if ([self.activationState isEqual:@"revoked"]) self.status = @"授权已撤销，请使用新授权码";
-            if ([self.activationState isEqual:@"device_limit"]) self.status = @"授权设备已达上限，请联系管理员";
-        } else if (claims) {
-            claims = nil;
-            self.status = @"授权未保存，请检查本机存储后重试";
+        if (claims) {
+            [self acceptVerifiedGrant:claims response:data];
         } else if (code == 401) {
             MbsSetGrantExpiry(0);
             self.activation = nil;
@@ -342,11 +369,14 @@ __attribute__((constructor)) static void MbsRestoreEditorGrant(void) { @autorele
     NSDictionary *claims = MbsVerifyEditorGrant(grantData,MbsPinnedGrantKey(),nonce,session[@"email"],MbsGrantDevice(),
         MbsGrantHash([session[@"token"] dataUsingEncoding:NSUTF8StringEncoding]),NSDate.date.timeIntervalSince1970);
     if (claims) {
-        MbsSetGrantExpiry([claims[@"expiresAt"] doubleValue]);
+        MbsSetGrantExpiry(MbsEditorGrantAllowsEditing(claims) ? [claims[@"expiresAt"] doubleValue] : 0);
         MbsEditorAuthorization *value = MbsEditorAuthorization.shared;
         value.token = session[@"token"]; value.email = session[@"email"]; value.device = claims[@"deviceId"];
         value.activation = claims[@"activation"];
         value.activationState = claims[@"activationState"] ?: (value.activation ? @"active" : @"unknown");
-        value.status = @"Mbs 授权已验证";
+        value.status = MbsEditorGrantAllowsEditing(claims) ? @"Mbs 授权已验证" : @"账号已验证，尚无有效编辑授权";
+        if ([value.activationState isEqual:@"expired"]) value.status = @"授权已到期，请重新激活";
+        if ([value.activationState isEqual:@"revoked"]) value.status = @"授权已撤销，请使用新授权码";
+        if ([value.activationState isEqual:@"device_limit"]) value.status = @"授权设备已达上限，请联系管理员";
     }
 } }

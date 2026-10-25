@@ -14,7 +14,11 @@ p.add_argument('--app', type=Path, required=True)
 p.add_argument('--work', type=Path, required=True)
 p.add_argument('--from-version', required=True)
 p.add_argument('--full-only', action='store_true', help='Stage the complete app without creating a module-only update')
+p.add_argument('--authorization-base-library', type=Path,
+               help='Audited original libauth used to build the website-only manager adapter; requires --full-only')
 args = p.parse_args()
+if args.authorization_base_library and not args.full_only:
+    p.error('Native authorization changes require --full-only; a module-only update cannot apply them.')
 repo = Path(__file__).resolve().parent.parent
 version = (repo/'VERSION').read_text().strip()
 assert not args.work.exists(), 'Use a new release work directory'
@@ -35,6 +39,14 @@ outer['CFBundleShortVersionString'] = version
 outer['CFBundleVersion'] = str(int(outer['CFBundleVersion'])+1)
 (app/'Contents/Info.plist').write_bytes(plistlib.dumps(outer))
 engine = app/'Contents/Resources/MbsEngine.app'
+if args.authorization_base_library:
+    adapter = args.work/'libauth-website.dylib'
+    subprocess.run(['python3',str(repo/'scripts/patch-editor-authorization.py'),
+                    '--input',str(args.authorization_base_library),'--output',str(adapter),
+                    '--exclusive-manager-checks'],check=True)
+    library = engine/'Contents/Frameworks/office6/libauth.dylib'
+    shutil.copy2(adapter,library)
+    subprocess.run(['codesign','--force','--sign','-',str(library)],check=True)
 subprocess.run(['python3',str(repo/'scripts/refresh-branding.py'),str(app)],check=True)
 res = 'Contents/Resources/MbsEngine.app/Contents/Resources/office6/res/'
 ribbon_paths = [res+'wppongmani.kui',res+'commands/wpp/ongmani/CT_MbsAI.kuip']

@@ -61,3 +61,9 @@ API 地址填写完整兼容接口前缀，例如 `https://你的服务器/v1`�
 ## 发布范围
 
 本地完整应用与本地差异包不会自动上传到本仓库。公开发布内容仅包含本仓库自研源代码及自研模块；完整应用安装镜像保存在本地发布目录。
+
+## 自有授权完整迁移（隔离开发中）
+
+安全回退基线为 0.1.40。迁移契约见 [自有授权接口](docs/mbs-authorization-contract.md)，已完成项、回退保护和未闭合路径见 [迁移分析](docs/authorization-migration-analysis.md)。本机已安装候选 0.1.41，保留原编辑器并接入网站授权，尚未覆盖全部旧授权路径，不是完全独立版，未公开发布。
+
+本次原生授权库变更需完整打包：`package-local-release.py --app <0.1.40完整程序> --work <新目录> --from-version 0.1.40 --full-only --authorization-base-library <已审计原始libauth.dylib>`。原始库必须匹配脚本固定摘要，否则停止；不使用模块增量包分发。

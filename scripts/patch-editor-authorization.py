@@ -15,12 +15,18 @@ import tempfile
 
 EXPECTED_SHA = "4aa19543b98b85c59bb5a836739afd66e976625a873de548a9c2d5d0e1a9fe1c"
 SUPPORT_STUB = 0xA42C8
+DLSYM_STUB = 0xA6458
 KEY = "MbsEditorLicenseVerified"
 TARGETS = [
     ("cn_common_or_domestic_active", 0x24210, 0x4000, "active", True),
     ("cn_enterprise_active", 0x4BFC0, 0x4200, "active", False),
     ("cn_enterprise_forbid_edit", 0x4B8D0, 0x4400, "forbid", False),
     ("cn_enterprise_account_edit", 0x4BB10, 0x4600, "allow", False),
+]
+EXCLUSIVE_TARGETS = TARGETS + [
+    ('license_manager_active', 0x7F4BC, 0x4800, 'allow', False),
+    ('global_account_edit', 0x106A4, 0x4A00, 'allow', False),
+    ('user_register_forbid_edit', 0x5DF08, 0x4C00, 'forbid', False),
 ]
 
 
@@ -132,10 +138,69 @@ key:
     return bytes(data), source
 
 
+def make_exclusive_shim(address, mode):
+    # Audited manager methods only. Never interpret an unknown native
+    # configuration key as authorization; it can default to true.
+    result = """
+    cbz w8, inactive
+    mov w9, #2
+    b level
+inactive:
+    mov w9, #0
+level:
+    cbz x1, result
+    str w9, [x1]
+result:
+    mov w0, w8
+""" if mode == 'active' else ('    eor w0, w8, #1\n' if mode == 'forbid' else '    mov w0, w8\n')
+    source = f"""
+.text
+.p2align 2
+_adapter:
+    stp x29, x30, [sp, #-48]!
+    mov x29, sp
+    stp x0, x1, [sp, #16]
+    stp x2, x3, [sp, #32]
+    mov x0, #-2
+    adr x1, decision
+    brk #1
+    cbz x0, unavailable
+    blr x0
+    mov w8, w0
+    b restore
+unavailable:
+    mov w8, #0
+restore:
+    ldp x0, x1, [sp, #16]
+    ldp x2, x3, [sp, #32]
+    ldp x29, x30, [sp], #48
+{result}
+    ret
+decision:
+    .asciz "MbsHasVerifiedEditorLicense"
+    .p2align 2
+"""
+    with tempfile.TemporaryDirectory(prefix='mbs-exclusive-manager-') as temp:
+        src = pathlib.Path(temp) / 'adapter.s'
+        obj = pathlib.Path(temp) / 'adapter.o'
+        src.write_text(source)
+        subprocess.run(['xcrun', 'clang', '-target', 'arm64-apple-macos11', '-c', str(src), '-o', str(obj)], check=True)
+        data = bytearray(text_section(obj.read_bytes()))
+    marker = struct.pack('<I', 0xD4200020)
+    offsets = [i for i in range(0, len(data)-3, 4) if data[i:i+4] == marker]
+    if len(offsets) != 1:
+        raise ValueError('missing or ambiguous dlsym marker')
+    offset = offsets[0]
+    data[offset:offset+4] = branch(address+offset, DLSYM_STUB, True)
+    return bytes(data), source
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--input", type=pathlib.Path, required=True)
     parser.add_argument("--output", type=pathlib.Path, required=True)
+    parser.add_argument('--exclusive-manager-checks', action='store_true',
+                        help='Seven audited manager methods use the signed Mbs decision only, with no native fallback')
     args = parser.parse_args()
     if args.input.resolve() == args.output.resolve() or args.output.exists():
         parser.error("output must be a new copy")
@@ -144,15 +209,25 @@ def main():
         parser.error("unsupported source digest; no bytes were changed")
     # All addresses below are file-backed RVAs with fileoff=vmaddr, established
     # for this exact binary. Reserve only observed zero header padding.
-    if set(original[0x4000:0x4800]) != {0}:
+    targets = EXCLUSIVE_TARGETS if args.exclusive_manager_checks else TARGETS
+    padding_end = 0x4E00 if args.exclusive_manager_checks else 0x4800
+    if set(original[0x4000:padding_end]) != {0}:
         parser.error("reserved header padding is not empty")
     patched = bytearray(original)
     manifest = {"source_sha256": EXPECTED_SHA, "license_key": KEY,
                 "success_semantics": "Mbs custom authorization, not vendor-issued activation",
                 "fallback": "original first instruction and remainder on unverified lease",
                 "patches": []}
-    for name, entry, shim_at, mode, cn_only in TARGETS:
-        shim, source = make_shim(entry, shim_at, original[entry:entry + 4], mode, cn_only)
+    if args.exclusive_manager_checks:
+        manifest.pop('license_key')
+        manifest.update({'fallback':'none at the seven audited manager entrypoints',
+                         'decision_symbol':'MbsHasVerifiedEditorLicense',
+                         'scope':'seven audited manager methods; not a whole-editor independence claim'})
+    for name, entry, shim_at, mode, cn_only in targets:
+        if args.exclusive_manager_checks:
+            shim, source = make_exclusive_shim(shim_at, mode)
+        else:
+            shim, source = make_shim(entry, shim_at, original[entry:entry + 4], mode, cn_only)
         if len(shim) > 0x200:
             raise ValueError("shim exceeds reserved interval")
         patched[shim_at:shim_at + len(shim)] = shim

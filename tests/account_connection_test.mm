@@ -63,7 +63,7 @@ int main(int argc, const char **argv) { @autoreleasepool {
         [c updateActivationState:@{@"verified":@YES,@"nativeAccepted":@YES,
             @"originalVendorLicense":@NO,@"status":@"授权码已激活",@"activation":activation}];
         assert([c.accountPanelAuthorization.stringValue containsString:@"Mbs 账号授权码已验证"]);
-        assert([c.accountPanelAuthorization.stringValue containsString:@"编辑器许可未验证"]);
+        assert(![c.accountPanelAuthorization.stringValue containsString:@"编辑器许可未验证"]);
         assert(![c.accountPanelAuthorization.stringValue containsString:@"已激活"]);
         assert([c.activationSummary.stringValue containsString:@"Mbs 账号标准授权"]);
         [c updateActivationState:@{@"verified":@NO,@"status":@"登录已失效"}];

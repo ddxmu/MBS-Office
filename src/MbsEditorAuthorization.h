@@ -17,4 +17,6 @@ char *MbsCopyEditorAuthorizationState(void);
 #import <Foundation/Foundation.h>
 NSDictionary *MbsVerifyEditorGrant(NSData *response, NSData *publicKey,
     NSString *nonce, NSString *email, NSString *device, NSString *sessionHash, NSTimeInterval now);
+// Call only with claims already returned by MbsVerifyEditorGrant.
+bool MbsEditorGrantAllowsEditing(NSDictionary *verifiedClaims);
 #endif

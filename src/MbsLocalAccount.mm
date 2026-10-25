@@ -632,11 +632,8 @@ static NSTextField *AccountLabel(NSView *view, NSString *text, NSRect frame) {
     NSString *status = state[@"status"] ?: @"授权状态待验证";
     if ([status isEqual:@"授权码已激活"]) status = @"Mbs 账号授权码已验证";
     if ([status isEqual:@"Mbs 授权已验证"]) status = @"Mbs 账号授权已验证";
-    // The Mbs grant and the native probe do not establish an editor license.
-    BOOL editorUnverified = [state[@"verified"] boolValue] && ![state[@"originalVendorLicense"] boolValue];
-    self.accountPanelAuthorization.stringValue = editorUnverified ?
-        [status stringByAppendingString:@"\n编辑器许可未验证，当前授权不代表编辑功能可用。"] : status;
-    self.accountPanelAuthorization.textColor = editorUnverified ? NSColor.secondaryLabelColor : NSColor.tertiaryLabelColor;
+    self.accountPanelAuthorization.stringValue = status;
+    self.accountPanelAuthorization.textColor = NSColor.secondaryLabelColor;
     self.activationButton.enabled = ![state[@"busy"] boolValue];
     NSDictionary *activation = [state[@"activation"] isKindOfClass:NSDictionary.class] ? state[@"activation"] : nil;
     if ([state[@"verified"] boolValue] && activation) {

@@ -41,6 +41,12 @@ int main(int argc,const char **argv) { @autoreleasepool {
         NSCAssert([activation[@"expiresAt"] doubleValue]-NSDate.date.timeIntervalSince1970>364*86400,@"full year activation");
         NSCAssert(MbsReadGrantFile("editor-license.json").length,@"signed grant persisted");
         NSCAssert(!MbsNativeAuthorizationStates().count,@"test executable cannot pretend to be native editor");
+    } else if ([mode isEqual:@"refresh"]) {
+        NSDictionary *saved = [NSJSONSerialization JSONObjectWithData:MbsReadGrantFile("session.json") options:0 error:nil];
+        NSCAssert(saved,@"existing test-copy session required");
+        MbsRequestEditorLicense([saved[@"token"] UTF8String],[saved[@"email"] UTF8String]);
+        pump(^BOOL{ return !MbsEditorAuthorization.shared.task; });
+        NSCAssert(MbsHasVerifiedEditorLicense() && [MbsEditorAuthorization.shared.activationState isEqual:@"active"],@"website activation must verify");
     } else if ([mode isEqual:@"restore"]) {
         NSCAssert(MbsHasVerifiedEditorLicense(),@"signed grant must restore before main");
     } else if ([mode isEqual:@"reject-cache"]) {
