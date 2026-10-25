@@ -306,6 +306,10 @@ static BOOL MbsSuppressLegacyAccountHover(kso_qt::QObject *receiver,unsigned sho
 }
 static bool routeClick(kso_qt::QObject*receiver,kso_qt::QEvent*event) {
     unsigned short type=0;if(event)memcpy(&type,(char*)event+16,2);
+    if (type==17 && NSThread.isMainThread) {
+        auto finish=(void (*)(void *))dlsym(RTLD_DEFAULT,"MbsScheduleNativeLegacyLogin");
+        if (finish) finish(receiver);
+    }
     if (NSThread.isMainThread && MbsSuppressLegacyAccountHover(receiver,type)) return true;
     if(type==3 && NSThread.isMainThread) {
         @autoreleasepool {

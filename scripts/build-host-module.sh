@@ -6,7 +6,7 @@ python3 scripts/build-branding-resource.py
 clang++ -target arm64-apple-macos13.0 -std=c++17 -dynamiclib \
   src/MbsOfflineFlags.cpp src/MbsNativeBranding.mm src/MbsBrandResources.mm src/MbsIntegration.cpp \
   src/MbsAiPanel.mm src/MbsAiPresentation.mm src/MbsAbout.mm src/MbsAiBridge.mm src/MbsLocalAccount.mm src/MbsEditorAuthorization.mm \
-  src/MbsUpdates.mm src/MbsUiActions.mm src/MbsLoginAccessibility.mm src/MbsLegacyKeychain.mm src/MbsStartupRouting.mm src/MbsPluginPaths.mm src/MbsPdfPrivileges.cpp src/MbsLegacyUpdateNotice.mm \
+  src/MbsUpdates.mm src/MbsUiActions.mm src/MbsLoginAccessibility.mm src/MbsLegacyKeychain.mm src/MbsStartupRouting.mm src/MbsPluginPaths.mm src/MbsPdfPrivileges.cpp src/MbsLegacyUpdateNotice.mm src/MbsLegacyDialogRouting.mm \
   -Isrc -fobjc-arc -framework AppKit -framework Security \
   -undefined dynamic_lookup -Wno-nullability-completeness -Wno-deprecated-declarations \
   -Wl,-sectcreate,__TEXT,__mbs_art,assets/mbs-ai-assistant.png \

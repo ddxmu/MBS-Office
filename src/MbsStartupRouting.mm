@@ -115,6 +115,16 @@ extern "C" unsigned MbsLegacyStartupPromptCount(void) {
     return __atomic_load_n(&MbsStartupRoutes,__ATOMIC_RELAXED);
 }
 
+extern "C" void MbsNoteNativeStartupCompletion(void) {
+    MbsInitialStartupRecovery=NO;
+    if (MbsLegacyStartupPromptCount()!=0) return;
+    __atomic_add_fetch(&MbsStartupRoutes,1,__ATOMIC_RELAXED);
+    MbsLastStartupRecovery=NSDate.date;
+    [MbsRecoveryDefaults() setObject:MbsLastStartupRecovery forKey:MbsRecoveryLastKey];
+    if (MbsAutomaticRecoveryTimer) CFRunLoopTimerSetNextFireDate(MbsAutomaticRecoveryTimer,
+        CFAbsoluteTimeGetCurrent()+MbsSavedRecoveryInterval());
+}
+
 static BOOL MbsRecoverFailedLogin(NSWindow *window, BOOL recordRecovery=YES) {
     if (!NSThread.isMainThread || MbsRecoveringLegacyWindow || !window.isVisible ||
         ![window.title isEqualToString:@"账号登录"]) return NO;
