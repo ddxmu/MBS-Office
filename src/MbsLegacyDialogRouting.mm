@@ -24,7 +24,6 @@ extern const unsigned char MbsDialogMeta[] __asm__("__ZN6kso_qt7QDialog16staticM
 void *MbsDialogCast(const void *,void *) __asm__("__ZNK6kso_qt11QMetaObject4castEPNS_7QObjectE");
 
 static NSMutableDictionary<NSValue *,id> *MbsLegacyDialogs;
-static BOOL MbsFirstLegacyDialogScheduled;
 static unsigned MbsLegacyDialogSchedules, MbsLegacyDialogFinishes;
 static BOOL MbsIsOldQtLogin(void *dialog) {
     auto title=MbsDialogTitle(dialog);
@@ -72,8 +71,7 @@ static void MbsScheduleQtLoginEnd(void *dialog) {
     MbsLegacyDialogDeadline *deadline=[MbsLegacyDialogDeadline new];
     deadline->_dialog=dialog; deadline->_weak=MbsDialogWeak(dialog);
     if (!deadline->_weak) return;
-    NSTimeInterval delay=MbsFirstLegacyDialogScheduled ? 0 : 1;
-    MbsFirstLegacyDialogScheduled=YES;
+    NSTimeInterval delay=0;
     deadline->_scheduledAt=CFAbsoluteTimeGetCurrent();
     if (++MbsLegacyDialogSchedules<=2)
         NSLog(@"MbsStartupLegacyLogin scheduled=%u delay=%.1fs",MbsLegacyDialogSchedules,delay);
@@ -85,11 +83,21 @@ static void MbsScheduleQtLoginEnd(void *dialog) {
 }
 extern "C" void MbsScheduleNativeLegacyLogin(void *dialog) { MbsScheduleQtLoginEnd(dialog); }
 static void MbsOldDialogVisible(void *dialog, bool visible) {
+    // Retire the old account surface before Qt shows a modal window.
+    if (visible && MbsIsOldQtLogin(dialog)) {
+        MbsScheduleQtLoginEnd(dialog);
+        return;
+    }
     MbsDialogVisibleOriginal(dialog,visible);
     if (visible) MbsScheduleQtLoginEnd(dialog);
     else [MbsLegacyDialogs removeObjectForKey:[NSValue valueWithPointer:dialog]];
 }
 static int MbsOldDialogExec(void *dialog) {
+    if (NSThread.isMainThread && MbsIsOldQtLogin(dialog)) {
+        MbsDialogReject(dialog);
+        MbsNoteNativeStartupCompletion();
+        return 0;
+    }
     MbsScheduleQtLoginEnd(dialog);
     int result=MbsDialogExecOriginal(dialog);
     [MbsLegacyDialogs removeObjectForKey:[NSValue valueWithPointer:dialog]];

@@ -27,8 +27,7 @@ int main(int argc,char **argv) { @autoreleasepool {
     [NSApp setActivationPolicy:NSApplicationActivationPolicyAccessory];
     void *first=dialog(@"账号登录");
     MbsOldDialogVisible(first,true);
-    pump(0.3); assert(MbsTestResult(first)==99);
-    pump(0.9); assert(MbsTestResult(first)==0 && completions==1);
+    pump(0.1); assert(MbsTestResult(first)==0 && completions==1);
     MbsTestDialogDtor(first);free(first);
 
     void *second=dialog(@"账号登录");
@@ -41,10 +40,14 @@ int main(int argc,char **argv) { @autoreleasepool {
     assert(MbsTestResult(own)==99 && completions==2);
     MbsOldDialogVisible(own,false);MbsTestDialogDtor(own);free(own);
 
-    MbsFirstLegacyDialogScheduled=NO;
     void *deleted=dialog(@"账号登录");
     MbsOldDialogVisible(deleted,true);
     MbsTestDialogDtor(deleted);free(deleted);pump(1.1);
     assert(completions==2 && MbsLegacyDialogs.count==0);
-    puts("PASS: exact old dialog rejects normally at one second, repeats finish immediately, Mbs account stays open, deleted Qt objects are safe");
+    void *modal=dialog(@"账号登录");
+    CFAbsoluteTime start=CFAbsoluteTimeGetCurrent();
+    assert(MbsOldDialogExec(modal)==0 && completions==3);
+    assert(CFAbsoluteTimeGetCurrent()-start<0.1);
+    MbsTestDialogDtor(modal);free(modal);
+    puts("PASS: old login never enters modal exec, all old dialogs finish without delay, Mbs account stays open, deleted Qt objects are safe");
 } }
