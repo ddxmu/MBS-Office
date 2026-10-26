@@ -117,6 +117,10 @@ static kso_qt::QString rebrandUi(kso_qt::QString &translated, const char *contex
     NSString *text = readUiString(translated);
     NSString *sourceText = source ? [NSString stringWithUTF8String:source] : @"";
     NSString *contextText = context ? [NSString stringWithUTF8String:context] : @"";
+    if ([text isEqualToString:@"稻壳资源"] || [text isEqualToString:@"Docer Resource Shop"]) {
+        translated = uiString(@"");
+        return uiString(@"Mbs资源");
+    }
     if ([text containsString:@"免费使用企业版"] && !isLegalText(text)) {
         NSString *updated = [text stringByReplacingOccurrencesOfString:@"免费使用企业版" withString:@"版本升级"];
         translated = uiString(@"");

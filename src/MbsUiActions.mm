@@ -20,6 +20,7 @@ public: const void *data;
 class __attribute__((visibility("hidden"))) QVariant {
 public: alignas(8) unsigned char data[16];
     __attribute__((visibility("default"))) QVariant(bool);
+    __attribute__((visibility("default"))) QVariant(const QString &);
     __attribute__((visibility("default"))) ~QVariant();
     __attribute__((visibility("default"))) QString toString() const;
     __attribute__((visibility("default"))) int toInt(bool * = nullptr) const;
@@ -53,6 +54,7 @@ void labelSetText(void*,const kso_qt::QString&) __asm__("__ZN6kso_qt6QLabel7setT
 void buttonSetText(void*,const kso_qt::QString&) __asm__("__ZN6kso_qt15QAbstractButton7setTextERKNS_7QStringE");
 void widgetSetVisibleOriginal(kso_qt::QWidget *,bool) __asm__("__ZN6kso_qt7QWidget10setVisibleEb");
 void widgetShowOriginal(kso_qt::QWidget *) __asm__("__ZN6kso_qt7QWidget4showEv");
+void widgetToolTipOriginal(kso_qt::QWidget *,const kso_qt::QString &) __asm__("__ZN6kso_qt7QWidget10setToolTipERKNS_7QStringE");
 struct MbsQtPoint { int x,y; };
 MbsQtPoint widgetMapToGlobal(const kso_qt::QWidget *,const MbsQtPoint &) __asm__("__ZNK6kso_qt7QWidget11mapToGlobalERKNS_6QPointE");
 void nativeColorCtor(void *,unsigned) __asm__("__ZN6kso_qt6QColorC1Ej");
@@ -106,9 +108,17 @@ static BOOL MbsIsAiPromotionText(NSString *text) {
         ([text containsString:@"大会员"] || [text containsString:@"AI权益"]);
 }
 static NSString *updated(NSString *text) {
+    if ([text isEqualToString:@"WPS"]) return @"Mbs";
+    if ([text isEqualToString:@"稻壳资源"] || [text isEqualToString:@"Docer Resource Shop"]) return @"Mbs资源";
     if (isRemovedAssistantText(text)) return @"";
     NSString *result = [text stringByReplacingOccurrencesOfString:@"免费使用企业版" withString:@"版本升级"];
     return result;
+}
+static void widgetToolTip(kso_qt::QWidget *widget,const kso_qt::QString &text) {
+    NSString *value=read(text);
+    if ([value isEqualToString:@"稻壳资源"] || [value isEqualToString:@"Docer Resource Shop"])
+        widgetToolTipOriginal(widget,literal(@"Mbs资源"));
+    else widgetToolTipOriginal(widget,text);
 }
 static BOOL isUpgradeText(NSString *text) {
     NSString *value = [text stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
@@ -272,14 +282,16 @@ static void MbsRefreshAccountEntries(void) {
     for (int index=list->begin;index<list->end;++index) {
         auto *widget=list->items[index];
         NSString *kind=className(widget);
+        if ([kind isEqualToString:@"KStatusButton"] && [property(widget,"text") isEqualToString:@"WPS"]) {
+            if (MbsIsPresentationThemeEntry(widget)) widget->setProperty("mbsResourceEntry",kso_qt::QVariant(true));
+            widget->setProperty("text",kso_qt::QVariant(literal(@"Mbs")));
+            continue;
+        }
         if (MbsIsPresentationThemeEntry(widget)) {
             if (![property(widget,"mbsResourceEntry") isEqualToString:@"true"])
                 widget->setProperty("mbsResourceEntry",kso_qt::QVariant(true));
             if (![property(widget,"text") isEqualToString:@"WPS"]) continue;
-            if (kso_qt::QAbstractButton::staticMetaObject.cast(widget))
-                ((kso_qt::QAbstractButton *)widget)->setText(literal(@""));
-            else if (kso_qt::QLabel::staticMetaObject.cast(widget))
-                ((kso_qt::QLabel *)widget)->setText(literal(@""));
+            widget->setProperty("text",kso_qt::QVariant(literal(@"Mbs")));
             continue;
         }
         if ([kind isEqualToString:@"KxPdfView"]) { MbsRefreshPdfTrialNotice(widget); continue; }
@@ -291,6 +303,11 @@ static void MbsRefreshAccountEntries(void) {
         BOOL label=!button && kso_qt::QLabel::staticMetaObject.cast(widget)!=nullptr;
         if (!button && !label) continue;
         NSString *text=property(widget,"text");
+        if ([text isEqualToString:@"WPS"]) {
+            if (button) ((kso_qt::QAbstractButton *)widget)->setText(literal(@"Mbs"));
+            else ((kso_qt::QLabel *)widget)->setText(literal(@"Mbs"));
+            continue;
+        }
         if (![text isEqualToString:@"立即登录"] && ![property(widget,"mbsAccountEntry") isEqualToString:@"true"]) continue;
         widget->setProperty("mbsAccountEntry",kso_qt::QVariant(true));
         if (![text isEqualToString:title]) {
@@ -468,6 +485,7 @@ __attribute__((used,section("__DATA,__interpose"))) static const Interpose actio
     {(const void*)&routeClick,(const void*)&kso_qt::QCoreApplication::notifyInternal2},
     {(const void*)&widgetSetVisible,(const void*)&widgetSetVisibleOriginal},
     {(const void*)&widgetShow,(const void*)&widgetShowOriginal},
+    {(const void*)&widgetToolTip,(const void*)&widgetToolTipOriginal},
     {(const void*)&nativeDrawAccountText,(const void*)&nativeDrawTextOriginal}
 };
 #endif
