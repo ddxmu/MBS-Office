@@ -8,7 +8,15 @@ int main() { @autoreleasepool {
     assert([MbsInstallerFailure(encode(),@"0.2.3",@"0.2.4") isEqual:receipt[@"message"]]);
     assert(!MbsInstallerFailure(encode(),@"0.2.2",@"0.2.4"));
     assert(!MbsInstallerFailure(encode(),@"0.2.3",@"0.2.5"));
+    assert(!MbsInstallerReady(encode(),@"0.2.3",@"0.2.4"));
+    receipt[@"state"] = @"preparing";
+    assert(!MbsInstallerReady(encode(),@"0.2.3",@"0.2.4"));
+    receipt[@"state"] = @"waiting";
+    assert(MbsInstallerReady(encode(),@"0.2.3",@"0.2.4"));
+    assert(!MbsInstallerReady(encode(),@"0.2.2",@"0.2.4"));
+    assert(!MbsInstallerReady(encode(),@"0.2.3",@"0.2.5"));
     receipt[@"state"] = @"completed";
+    assert(!MbsInstallerReady(encode(),@"0.2.3",@"0.2.4"));
     assert(!MbsInstallerFailure(encode(),@"0.2.3",@"0.2.4"));
     receipt[@"state"] = @"failed"; receipt[@"message"] = @42;
     assert(!MbsInstallerFailure(encode(),@"0.2.3",@"0.2.4"));

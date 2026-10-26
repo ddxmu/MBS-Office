@@ -228,6 +228,16 @@ static NSString *MbsInstallerFailure(NSData *data, NSString *fromVersion, NSStri
     return [message isKindOfClass:NSString.class] && message.length && message.length <= 1000 ? message : nil;
 }
 
+static BOOL MbsInstallerReady(NSData *data, NSString *fromVersion, NSString *toVersion)
+{
+    if (!data.length || data.length > 16384) return NO;
+    id result = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+    return [result isKindOfClass:NSDictionary.class] &&
+        [result[@"format"] isEqual:@"mbs-update-result-v1"] &&
+        [result[@"fromVersion"] isEqual:fromVersion] &&
+        [result[@"toVersion"] isEqual:toVersion] && [result[@"state"] isEqual:@"waiting"];
+}
+
 static NSData *MbsInstallerReceipt(void)
 {
     NSURL *base = [NSFileManager.defaultManager URLsForDirectory:NSApplicationSupportDirectory inDomains:NSUserDomainMask].firstObject;
@@ -244,12 +254,12 @@ static NSData *MbsInstallerReceipt(void)
 @property NSButton *upgradeButton, *checkButton, *revealButton;
 @property NSURLSession *session;
 @property NSURLSessionDownloadTask *downloadTask;
-@property NSTimer *timer;
+@property NSTimer *timer, *installerTimer;
 @property NSString *currentVersion, *notifiedVersion, *expectedDigest;
 @property NSDictionary *candidate;
 @property NSURL *downloadedURL, *downloadedSignatureURL;
 @property NSTask *installerTask;
-@property BOOL checking, downloading, installing, started, downloadHandled;
+@property BOOL checking, downloading, installing, started, downloadHandled, installerExitRequested;
 @end
 
 @implementation MbsUpdatesController
@@ -406,6 +416,9 @@ static NSData *MbsInstallerReceipt(void)
 {
     self.downloading = NO;
     self.installing = NO;
+    self.installerExitRequested = NO;
+    [self.installerTimer invalidate];
+    self.installerTimer = nil;
     self.downloadTask = nil;
     self.statusLabel.stringValue = message;
     [self.progress stopAnimation:nil];
@@ -451,23 +464,32 @@ static NSData *MbsInstallerReceipt(void)
     }
     self.installerTask = task;
     self.installing = YES;
-    self.statusLabel.stringValue = @"更新已校验，正在退出 Mbs Office；如有未保存文档请按提示保存，随后会自动安装并重启。";
-    [self.progress stopAnimation:nil];
+    self.installerExitRequested = NO;
+    self.statusLabel.stringValue = @"正在准备并校验安装文件，文稿仍可使用。准备完成后才会退出并自动安装重启。";
+    self.progress.indeterminate = YES;
+    [self.progress startAnimation:nil];
     [self refreshButtons];
-    self.upgradeButton.title = @"等待重启";
+    self.upgradeButton.title = @"准备更新";
     self.upgradeButton.enabled = NO;
-    // Keep the normal application termination path so unsaved documents still
-    // get the native save prompt; the installer waits for this process to exit.
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)),
-                   dispatch_get_main_queue(), ^{
-        if (self.installing) [NSApp terminate:nil];
-    });
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW,10*NSEC_PER_SEC),dispatch_get_main_queue(), ^{
-        if (!self.installing || self.installerTask != task || !task.running) return;
-        self.statusLabel.stringValue = @"安装器正在准备并等待退出。如取消过退出，请先保存文档，再点击“继续退出”；不会强制关闭文稿。";
-        self.upgradeButton.title = @"继续退出";
-        self.upgradeButton.enabled = YES;
-    });
+    [self.installerTimer invalidate];
+    self.installerTimer = [NSTimer timerWithTimeInterval:1 repeats:YES block:^(NSTimer *timer) {
+        MbsUpdatesController *controller = weakSelf;
+        if (!controller || controller.installerTask != task || !controller.installing) { [timer invalidate]; return; }
+        if (controller.installerExitRequested || !MbsInstallerReady(MbsInstallerReceipt(),
+            controller.currentVersion,controller.candidate[@"version"])) return;
+        controller.installerExitRequested = YES;
+        controller.statusLabel.stringValue = @"安装文件已准备好，正在退出；如有未保存文稿请按提示保存，随后自动安装并重启。";
+        [controller.progress stopAnimation:nil];
+        controller.upgradeButton.title = @"等待退出";
+        [NSApp terminate:nil];
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW,10*NSEC_PER_SEC),dispatch_get_main_queue(), ^{
+            if (!controller.installing || controller.installerTask != task || !task.running) return;
+            controller.statusLabel.stringValue = @"安装已准备好。如取消过退出，请先保存文稿，再点击“继续退出”；不会强制关闭文稿。";
+            controller.upgradeButton.title = @"继续退出";
+            controller.upgradeButton.enabled = YES;
+        });
+    }];
+    [NSRunLoop.mainRunLoop addTimer:self.installerTimer forMode:NSRunLoopCommonModes];
 }
 - (void)beginDownload:(NSString *)digest
 {
@@ -482,7 +504,7 @@ static NSData *MbsInstallerReceipt(void)
 - (void)upgrade:(id)sender
 {
     (void)sender;
-    if (self.installing) { [NSApp terminate:nil]; return; }
+    if (self.installing) { if (self.installerExitRequested) [NSApp terminate:nil]; return; }
     if (!self.candidate || self.checking || self.downloading || self.installing) return;
     self.downloading = YES;
     self.downloadedURL = nil;
