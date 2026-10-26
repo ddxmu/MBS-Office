@@ -215,6 +215,28 @@ static NSURL *MbsInstallerURL(NSBundle *outer)
     return nil;
 }
 
+static NSString *MbsInstallerFailure(NSData *data, NSString *fromVersion, NSString *toVersion)
+{
+    if (!data.length || data.length > 16384) return nil;
+    id result = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+    if (![result isKindOfClass:NSDictionary.class] ||
+        ![result[@"format"] isEqual:@"mbs-update-result-v1"] ||
+        ![result[@"fromVersion"] isEqual:fromVersion] ||
+        (toVersion && ![result[@"toVersion"] isEqual:toVersion]) ||
+        ![result[@"state"] isEqual:@"failed"]) return nil;
+    NSString *message = result[@"message"];
+    return [message isKindOfClass:NSString.class] && message.length && message.length <= 1000 ? message : nil;
+}
+
+static NSData *MbsInstallerReceipt(void)
+{
+    NSURL *base = [NSFileManager.defaultManager URLsForDirectory:NSApplicationSupportDirectory inDomains:NSUserDomainMask].firstObject;
+    NSURL *file = [base URLByAppendingPathComponent:@"Mbs Office/Updates/status.json"];
+    NSNumber *size = nil;
+    [file getResourceValue:&size forKey:NSURLFileSizeKey error:nil];
+    return size.unsignedLongLongValue <= 16384 ? [NSData dataWithContentsOfURL:file] : nil;
+}
+
 @interface MbsUpdatesController : NSObject <NSURLSessionDownloadDelegate>
 @property NSWindow *window;
 @property NSTextField *currentLabel, *latestLabel, *statusLabel;
@@ -388,6 +410,7 @@ static NSURL *MbsInstallerURL(NSBundle *outer)
     self.statusLabel.stringValue = message;
     [self.progress stopAnimation:nil];
     self.progress.hidden = YES;
+    self.upgradeButton.title = @"版本升级";
     [self refreshButtons];
 }
 - (void)startInstaller
@@ -409,6 +432,17 @@ static NSURL *MbsInstallerURL(NSBundle *outer)
     // status is in Updates/status.json, not in a pipe owned by this process.
     task.standardOutput = [NSFileHandle fileHandleWithNullDevice];
     task.standardError = [NSFileHandle fileHandleWithNullDevice];
+    __weak MbsUpdatesController *weakSelf = self;
+    task.terminationHandler = ^(NSTask *finished) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            MbsUpdatesController *controller = weakSelf;
+            if (!controller || controller.installerTask != finished || !controller.installing) return;
+            NSString *message = MbsInstallerFailure(MbsInstallerReceipt(),controller.currentVersion,
+                controller.candidate[@"version"]);
+            controller.installerTask = nil;
+            [controller downloadFailed:message ?: @"安装器已退出但更新尚未完成，请保存文档后重新升级。原有备份已保留。"];
+        });
+    };
     @try {
         [task launch];
     } @catch (NSException *exception) {
@@ -428,6 +462,12 @@ static NSURL *MbsInstallerURL(NSBundle *outer)
                    dispatch_get_main_queue(), ^{
         if (self.installing) [NSApp terminate:nil];
     });
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW,10*NSEC_PER_SEC),dispatch_get_main_queue(), ^{
+        if (!self.installing || self.installerTask != task || !task.running) return;
+        self.statusLabel.stringValue = @"安装器正在准备并等待退出。如取消过退出，请先保存文档，再点击“继续退出”；不会强制关闭文稿。";
+        self.upgradeButton.title = @"继续退出";
+        self.upgradeButton.enabled = YES;
+    });
 }
 - (void)beginDownload:(NSString *)digest
 {
@@ -442,6 +482,7 @@ static NSURL *MbsInstallerURL(NSBundle *outer)
 - (void)upgrade:(id)sender
 {
     (void)sender;
+    if (self.installing) { [NSApp terminate:nil]; return; }
     if (!self.candidate || self.checking || self.downloading || self.installing) return;
     self.downloading = YES;
     self.downloadedURL = nil;

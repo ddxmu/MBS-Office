@@ -31,8 +31,10 @@ int main() { @autoreleasepool {
         int status=0;assert(waitpid(child,&status,0)==child && WIFEXITED(status) && WEXITSTATUS(status)==42);
     }
     pid_t unchanged=123;errno=EDOM;
-    assert(MbsBrowserSpawn(&unchanged,path.c_str(),nullptr,nullptr,argv,environ)==EAGAIN);
-    assert(unchanged==123 && errno==EDOM);
+    double mainStart=MbsRetryNow();
+    assert(MbsBrowserSpawn(&unchanged,path.c_str(),nullptr,nullptr,argv,environ)==0);
+    assert(unchanged!=123 && errno==EDOM && MbsRetryNow()-mainStart<0.5);
+    int third=0; assert(waitpid(unchanged,&third,0)==unchanged && WEXITSTATUS(third)==42);
     char ordinary[]="/usr/bin/true";char *normal[]={ordinary,nullptr};
     pid_t child=0;assert(MbsBrowserSpawnP(&child,ordinary,nullptr,nullptr,normal,environ)==0);
     int status;assert(waitpid(child,&status,0)==child && WIFEXITED(status) && WEXITSTATUS(status)==0);

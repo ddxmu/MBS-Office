@@ -10,6 +10,7 @@
 #include <errno.h>
 #include <algorithm>
 #include <cstring>
+#include <syslog.h>
 
 // Only repeated early crashes of this bundle's CEF host earn a retry delay.
 // Process exit observation never consumes the editor's waitpid result.
@@ -35,13 +36,20 @@ static dispatch_source_t MbsBrowserEventSource;
 
 static bool MbsIsBrowserHost(const char *path) {
     if (!path) return false;
-    static NSString *expected;
+    static NSArray<NSString *> *expected;
     static dispatch_once_t once;
     dispatch_once(&once,^{
-        expected=[NSBundle.mainBundle.bundlePath stringByAppendingPathComponent:
-            @"Contents/SharedSupport/promecefpluginhost.app/Contents/MacOS/promecefpluginhost"];
+        NSMutableArray *paths=[NSMutableArray array];
+        for (NSString *suffix in @[@"",@" (Renderer)",@" (GPU)",@" (Plugin)"]) {
+            NSString *name=[@"promecefpluginhost" stringByAppendingString:suffix];
+            [paths addObject:[NSBundle.mainBundle.bundlePath stringByAppendingPathComponent:
+                [NSString stringWithFormat:@"Contents/SharedSupport/%@.app/Contents/MacOS/%@",name,name]]];
+        }
+        expected=[paths copy];
     });
-    return strcmp(path,expected.fileSystemRepresentation)==0;
+    for (NSString *candidate in expected)
+        if (strcmp(path,candidate.fileSystemRepresentation)==0) return true;
+    return false;
 }
 static void MbsObserveBrowser(pid_t pid,const char *path) {
     static dispatch_once_t once;
@@ -60,6 +68,9 @@ static void MbsObserveBrowser(pid_t pid,const char *path) {
                 if (!(event.flags&EV_ERROR) && (event.fflags&NOTE_EXITSTATUS)) {
                     int status=(int)event.data;
                     bool failed=WIFSIGNALED(status) || (WIFEXITED(status) && WEXITSTATUS(status)!=0);
+                    static unsigned reported;
+                    if (failed && reported++<4)
+                        syslog(LOG_ERR,"Mbs CEF child exit status=%d name=%s",status,strrchr(child->second.path.c_str(),'/')+1);
                     double now=MbsRetryNow();
                     MbsBrowserRetries[child->second.path].exited(failed,now-child->second.started,now);
                 }
@@ -75,7 +86,7 @@ static void MbsObserveBrowser(pid_t pid,const char *path) {
     EV_SET(&change,pid,EVFILT_PROC,EV_ADD|EV_ONESHOT,NOTE_EXIT|NOTE_EXITSTATUS,0,nullptr);
     if (kevent(MbsBrowserEvents,&change,1,nullptr,0,nullptr)<0) MbsBrowserChildren.erase(pid);
 }
-static bool MbsWaitForBrowserRetry(const char *path) {
+static void MbsWaitForBrowserRetry(const char *path) {
     for (;;) {
         double delay;
         {
@@ -85,10 +96,10 @@ static bool MbsWaitForBrowserRetry(const char *path) {
             if (delay<=0) {
                 // Reserve the retry slot when several launch workers are waiting.
                 if (state.failures>=2) state.next=MbsRetryNow()+2;
-                return true;
+                return;
             }
         }
-        if (NSThread.isMainThread) return false;
+        if (NSThread.isMainThread) return;
         struct timespec pause={(time_t)delay,(long)((delay-(time_t)delay)*1e9)};
         while (nanosleep(&pause,&pause)<0 && errno==EINTR) {}
     }
@@ -101,9 +112,10 @@ static int MbsLaunchBrowser(MbsSpawn original,pid_t *pid,const char *path,
     char *const argv[],char *const env[]) {
     if (MbsBrowserSpawnActive || !MbsIsBrowserHost(path)) return original(pid,path,actions,attrs,argv,env);
     int saved=errno;
-    if (!MbsWaitForBrowserRetry(path)) { errno=saved; return EAGAIN; }
+    MbsWaitForBrowserRetry(path);
     pid_t child=0;
     MbsBrowserSpawnActive=true;
+    errno=saved;
     int result=original(pid ? pid : &child,path,actions,attrs,argv,env);
     MbsBrowserSpawnActive=false;
     int after=errno;

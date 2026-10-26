@@ -365,15 +365,28 @@ func mbsWaitForExit(_ pid: Int32, app: URL, timeout: TimeInterval = 180) throws 
         throw MbsInstallerError("pid_mismatch", "等待的进程不属于此 Mbs Office 应用。")
     }
     let deadline = Date().addingTimeInterval(timeout)
+    var notifiedLaunchers = Set<Int32>()
     while Date() < deadline {
         let path = try mbsProcessPath(pid)
-        if (path == nil || path != expected) && mbsApplicationProcesses(app).isEmpty { return }
+        if path == nil || path != expected {
+            let running = mbsApplicationProcesses(app)
+            if running.isEmpty { return }
+            // The outer launcher owns no documents. Once the editor has exited,
+            // ask a leftover launcher to quit normally before replacing its app.
+            // Never terminate an editor or a different installed copy here.
+            for process in running where mbsShouldCloseLauncher(process.bundleURL, app:app) {
+                if notifiedLaunchers.insert(process.processIdentifier).inserted { process.terminate() }
+            }
+        }
         Thread.sleep(forTimeInterval:0.25)
     }
     throw MbsInstallerError("editor_still_open", "编辑器仍在运行。请完成保存并正常退出后重新升级；未强制关闭任何进程。")
 }
+func mbsShouldCloseLauncher(_ bundle: URL?, app: URL) -> Bool {
+    bundle?.standardizedFileURL == app.standardizedFileURL
+}
 func mbsLaunch(_ app: URL) throws {
-    try mbsTool("/usr/bin/open",["-a",app.path])
+    try mbsTool("/usr/bin/open",["-n",app.path])
 }
 func mbsConfirmLaunch(_ app: URL, timeout: TimeInterval = 30) -> Bool {
     let engine = app.appendingPathComponent("Contents/Resources/MbsEngine.app").standardizedFileURL
@@ -459,7 +472,9 @@ func mbsSupport() throws -> URL {
 func mbsJSON(_ value: [String:Any]) throws -> Data {
     try JSONSerialization.data(withJSONObject:value,options:[.sortedKeys])
 }
+var mbsInstallerResultDetails: [String:Any] = [:]
 func mbsResult(_ state: String, _ message: String, extra: [String:Any] = [:], persist: Bool = true) {
+    if persist { mbsInstallerResultDetails = extra }
     var value = extra
     value["format"] = "mbs-update-result-v1"
     value["state"] = state
@@ -641,10 +656,14 @@ enum MbsModuleInstallerMain {
             let arguments = try MbsInstallerArguments(Array(CommandLine.arguments.dropFirst()))
             try mbsInstall(arguments)
         } catch let error as MbsInstallerError {
-            mbsResult("failed",error.description,extra:["errorCode":error.code],persist:!verify)
+            var details = mbsInstallerResultDetails
+            details["errorCode"] = error.code
+            mbsResult("failed",error.description,extra:details,persist:!verify)
             exit(1)
         } catch {
-            mbsResult("failed","更新未完成，原有备份不会被自动删除。",extra:["errorCode":"system_error"],persist:!verify)
+            var details = mbsInstallerResultDetails
+            details["errorCode"] = "system_error"
+            mbsResult("failed","更新未完成，原有备份不会被自动删除。",extra:details,persist:!verify)
             exit(1)
         }
     }

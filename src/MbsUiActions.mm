@@ -20,7 +20,6 @@ public: const void *data;
 class __attribute__((visibility("hidden"))) QVariant {
 public: alignas(8) unsigned char data[16];
     __attribute__((visibility("default"))) QVariant(bool);
-    __attribute__((visibility("default"))) QVariant(const QString &);
     __attribute__((visibility("default"))) ~QVariant();
     __attribute__((visibility("default"))) QString toString() const;
     __attribute__((visibility("default"))) int toInt(bool * = nullptr) const;
@@ -55,6 +54,7 @@ void buttonSetText(void*,const kso_qt::QString&) __asm__("__ZN6kso_qt15QAbstract
 void widgetSetVisibleOriginal(kso_qt::QWidget *,bool) __asm__("__ZN6kso_qt7QWidget10setVisibleEb");
 void widgetShowOriginal(kso_qt::QWidget *) __asm__("__ZN6kso_qt7QWidget4showEv");
 void widgetToolTipOriginal(kso_qt::QWidget *,const kso_qt::QString &) __asm__("__ZN6kso_qt7QWidget10setToolTipERKNS_7QStringE");
+void toolButtonTextXOriginal(void *,const kso_qt::QString &) __asm__("__ZN11KToolButton8setTextXERKN6kso_qt7QStringE");
 struct MbsQtPoint { int x,y; };
 MbsQtPoint widgetMapToGlobal(const kso_qt::QWidget *,const MbsQtPoint &) __asm__("__ZNK6kso_qt7QWidget11mapToGlobalERKNS_6QPointE");
 void nativeColorCtor(void *,unsigned) __asm__("__ZN6kso_qt6QColorC1Ej");
@@ -190,15 +190,17 @@ static NSString *className(kso_qt::QObject*object) {
     return name?[NSString stringWithUTF8String:name]:@"";
 }
 static BOOL MbsIsPresentationThemeEntry(kso_qt::QObject *object) {
-    if (![className(object) isEqualToString:@"KStatusButton"] ||
-        (![property(object,"text") isEqualToString:@"WPS"] &&
-         ![property(object,"mbsResourceEntry") isEqualToString:@"true"])) return NO;
-    void *data=nullptr; memcpy(&data,(char *)object+8,8);
-    auto *parent=data?*(kso_qt::QObject **)((char *)data+16):nullptr;
-    if (!parent || ![className(parent) isEqualToString:@"KStatusBar"]) return NO;
-    memcpy(&data,(char *)parent+8,8);
-    auto *window=data?*(kso_qt::QObject **)((char *)data+16):nullptr;
-    return window && [className(window) isEqualToString:@"KxWppMainWindow"];
+    auto *status=(const kso_qt::QMetaObject *)dlsym(RTLD_DEFAULT,"_ZN13KStatusButton16staticMetaObjectE");
+    if (!status || !status->cast(object)) return NO;
+    auto command=(kso_qt::QObject *(*)(const void *))dlsym(RTLD_DEFAULT,"_ZNK11KToolButton7commandEv");
+    auto *bound=command?command(object):nullptr;
+    if (!bound) return NO;
+    return [property(bound,"id") isEqualToString:@"wppStatusDesignInfo"];
+}
+static void toolButtonTextX(void *button,const kso_qt::QString &text) {
+    if (MbsIsPresentationThemeEntry((kso_qt::QObject *)button))
+        toolButtonTextXOriginal(button,literal(@"Mbs"));
+    else toolButtonTextXOriginal(button,text);
 }
 static BOOL MbsIsLegacyAccountPanel(NSString *name) {
     return [name isEqualToString:@"KPromeAccountPanelWidget"] ||
@@ -282,16 +284,10 @@ static void MbsRefreshAccountEntries(void) {
     for (int index=list->begin;index<list->end;++index) {
         auto *widget=list->items[index];
         NSString *kind=className(widget);
-        if ([kind isEqualToString:@"KStatusButton"] && [property(widget,"text") isEqualToString:@"WPS"]) {
-            if (MbsIsPresentationThemeEntry(widget)) widget->setProperty("mbsResourceEntry",kso_qt::QVariant(true));
-            widget->setProperty("text",kso_qt::QVariant(literal(@"Mbs")));
-            continue;
-        }
         if (MbsIsPresentationThemeEntry(widget)) {
-            if (![property(widget,"mbsResourceEntry") isEqualToString:@"true"])
-                widget->setProperty("mbsResourceEntry",kso_qt::QVariant(true));
-            if (![property(widget,"text") isEqualToString:@"WPS"]) continue;
-            widget->setProperty("text",kso_qt::QVariant(literal(@"Mbs")));
+            // KStatusButton paints textX before its ordinary/read-only text.
+            // This real setter ignores equal values and preserves its icon.
+            toolButtonTextXOriginal(widget,literal(@"Mbs"));
             continue;
         }
         if ([kind isEqualToString:@"KxPdfView"]) { MbsRefreshPdfTrialNotice(widget); continue; }
@@ -486,6 +482,7 @@ __attribute__((used,section("__DATA,__interpose"))) static const Interpose actio
     {(const void*)&widgetSetVisible,(const void*)&widgetSetVisibleOriginal},
     {(const void*)&widgetShow,(const void*)&widgetShowOriginal},
     {(const void*)&widgetToolTip,(const void*)&widgetToolTipOriginal},
+    {(const void*)&toolButtonTextX,(const void*)&toolButtonTextXOriginal},
     {(const void*)&nativeDrawAccountText,(const void*)&nativeDrawTextOriginal}
 };
 #endif

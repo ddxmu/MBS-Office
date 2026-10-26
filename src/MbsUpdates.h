@@ -3,8 +3,8 @@
 extern "C" {
 #endif
 
-// The current updater downloads and verifies self-developed modules only.
-// It does not extract, execute, install, quit the editor, or restart the app.
+// Downloads signed self-developed modules and delegates installation and restart
+// to the separate installer, preserving the editor's normal save/quit prompts.
 void MbsShowUpdates(void);
 void MbsStartUpdateChecks(void);
 
