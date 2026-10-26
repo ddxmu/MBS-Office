@@ -6,7 +6,9 @@
 @property NSTableView *table;
 @property NSScrollView *scroll;
 @property NSTextField *empty;
+@property NSTextField *rangeHint;
 @property BOOL recentSelected;
+@property BOOL lastDayOnly;
 - (void)reload:(id)sender;
 @end
 @implementation MbsRecentHomeView
@@ -23,6 +25,10 @@
         target:self action:@selector(reload:)];
     refresh.bordered=NO; refresh.frame=NSMakeRect(88,24,28,28); refresh.toolTip=@"刷新最近文档";
     [self addSubview:refresh];
+    self.rangeHint=[NSTextField labelWithString:@""];
+    self.rangeHint.frame=NSMakeRect(132,28,320,24);
+    self.rangeHint.font=[NSFont systemFontOfSize:13]; self.rangeHint.textColor=NSColor.secondaryLabelColor;
+    [self addSubview:self.rangeHint];
     self.scroll=[[NSScrollView alloc] initWithFrame:NSMakeRect(20,90,frame.size.width-40,frame.size.height-110)];
     self.scroll.autoresizingMask=NSViewWidthSizable|NSViewHeightSizable;
     self.scroll.hasVerticalScroller=YES; self.scroll.borderType=NSNoBorder;
@@ -60,11 +66,20 @@
     char *json=MbsCopyRecentDocuments();
     NSData *data=json ? [NSData dataWithBytes:json length:strlen(json)] : nil; free(json);
     id records=data ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
-    self.records=[records isKindOfClass:NSArray.class] ? records : @[];
+    self.records=MbsRecentDocumentRows([records isKindOfClass:NSArray.class] ? records : @[],self.lastDayOnly,NSDate.date);
+    self.rangeHint.stringValue=self.lastDayOnly ? @"近24小时打开或保存的文档" : @"";
+    self.empty.stringValue=self.lastDayOnly ? @"近24小时暂无打开或保存记录。" : @"暂无打开记录\n打开或保存文档后，将在这里显示。";
     [self.table reloadData]; self.empty.hidden=self.records.count!=0;
 }
-- (NSInteger)numberOfRowsInTableView:(NSTableView *)table { return self.records.count; }
+- (NSInteger)numberOfRowsInTableView:(NSTableView *)table { return self.records.count+1; }
 - (NSView *)tableView:(NSTableView *)table viewForTableColumn:(NSTableColumn *)column row:(NSInteger)row {
+    if (row==(NSInteger)self.records.count) {
+        if (![column.identifier isEqualToString:@"fileName"]) return nil;
+        NSTextField *more=[NSTextField labelWithString:self.lastDayOnly ? @"返回最近15条" : @"更多文档"];
+        more.textColor=NSColor.systemBlueColor; more.font=[NSFont systemFontOfSize:14 weight:NSFontWeightMedium];
+        more.toolTip=self.lastDayOnly ? @"返回不限时间的最近15条记录" : @"查看近24小时打开或保存的文档";
+        return more;
+    }
     NSDictionary *record=self.records[row]; NSString *key=column.identifier;
     NSTextField *label=[table makeViewWithIdentifier:key owner:self];
     if (!label) {
@@ -86,6 +101,10 @@
 }
 - (void)openSelected:(id)sender {
     NSInteger row=self.table.clickedRow;
+    if (row==(NSInteger)self.records.count) {
+        self.lastDayOnly=!self.lastDayOnly; [self reload:nil];
+        [self.table deselectAll:nil]; [self.table scrollRowToVisible:0]; return;
+    }
     if (row<0 || row>=(NSInteger)self.records.count) return;
     NSURL *url=[NSURL fileURLWithPath:self.records[row][@"path"]];
     [NSWorkspace.sharedWorkspace openURLs:@[url] withApplicationAtURL:NSBundle.mainBundle.bundleURL
@@ -129,5 +148,6 @@ void MbsUpdateRecentHomeView(NSWindow *window) {
         });
     }
     BOOL visible=home && existing.recentSelected;
+    if (visible && existing.hidden) [existing reload:nil];
     if (existing.hidden==visible) existing.hidden=!visible;
 }

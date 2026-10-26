@@ -9,3 +9,7 @@ char *MbsCopyRecentDocuments(void);
 #ifdef __cplusplus
 }
 #endif
+#ifdef __OBJC__
+#import <Foundation/Foundation.h>
+NSArray<NSDictionary *> *MbsRecentDocumentRows(NSArray<NSDictionary *> *records, BOOL lastDayOnly, NSDate *now);
+#endif

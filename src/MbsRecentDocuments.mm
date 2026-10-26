@@ -1,6 +1,19 @@
 #import <Foundation/Foundation.h>
 #import "MbsRecentDocuments.h"
 
+NSArray<NSDictionary *> *MbsRecentDocumentRows(NSArray<NSDictionary *> *records, BOOL lastDayOnly, NSDate *now) {
+    if (!lastDayOnly) return [records subarrayWithRange:NSMakeRange(0,MIN(records.count,15))];
+    int64_t end=(int64_t)(now.timeIntervalSince1970*1000), start=end-24LL*60*60*1000;
+    NSMutableArray *result=[NSMutableArray array];
+    for (NSDictionary *record in records) {
+        if (![record isKindOfClass:NSDictionary.class] ||
+            ![record[@"accessTime"] isKindOfClass:NSNumber.class]) continue;
+        int64_t time=[record[@"accessTime"] longLongValue];
+        if (time>=start && time<=end) [result addObject:record];
+    }
+    return result;
+}
+
 static NSString *MbsRecentAppName(NSString *path) {
     NSString *suffix=path.pathExtension.lowercaseString;
     if ([@[@"xls",@"xlsx",@"xlsm",@"xlsb",@"xlt",@"xltx",@"csv",@"ods",@"et",@"ett"] containsObject:suffix]) return @"et";

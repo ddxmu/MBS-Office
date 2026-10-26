@@ -6,20 +6,20 @@ import re
 import xml.etree.ElementTree as ET
 
 ACTIONS = [
-    ('MbsAiPpt', 'AI 生成 PPT', 'NewSlide'),
-    ('MbsAiDocumentPpt', '文档生成 PPT', 'InsertTextboxHorizontal'),
-    ('MbsAiOutlinePpt', '大纲生成 PPT', 'NewSlideFromOutline'),
-    ('MbsAiSlide', 'AI 生成单页', 'NewSlide'),
-    ('MbsAiSlides', 'AI 生成多页', 'Duplicate'),
-    ('MbsAiImage', 'AI 生成图片', 'InsertPicture'),
-    ('MbsAiWrite', '帮我写', 'AiPolish'),
-    ('MbsAiRewrite', '帮我改', 'AiPolish'),
-    ('MbsAiExpand', '扩写', 'IncreaseSpace'),
-    ('MbsAiShorten', '缩写', 'DecreaseSpace'),
-    ('MbsAiPolish', '润色', 'AiPolish'),
-    ('MbsAiMore', '发现更多', 'Options'),
-    ('MbsAiHistory', '历史会话', 'RecentFile'),
-    ('MbsAiSettings', '设置', 'Options'),
+    ('MbsAiPpt', 'AI 生成 PPT', 'MbsAiPpt'),
+    ('MbsAiDocumentPpt', '文档生成 PPT', 'MbsAiDocumentPpt'),
+    ('MbsAiOutlinePpt', '大纲生成 PPT', 'MbsAiOutlinePpt'),
+    ('MbsAiSlide', 'AI 生成单页', 'MbsAiSlide'),
+    ('MbsAiSlides', 'AI 生成多页', 'MbsAiSlides'),
+    ('MbsAiImage', 'AI 生成图片', 'MbsAiImage'),
+    ('MbsAiWrite', '帮我写', 'MbsAiWrite'),
+    ('MbsAiRewrite', '帮我改', 'MbsAiRewrite'),
+    ('MbsAiExpand', '扩写', 'MbsAiExpand'),
+    ('MbsAiShorten', '缩写', 'MbsAiShorten'),
+    ('MbsAiPolish', '润色', 'MbsAiPolish'),
+    ('MbsAiMore', '发现更多', 'MbsAiMore'),
+    ('MbsAiHistory', '历史会话', 'MbsAiHistory'),
+    ('MbsAiSettings', '设置', 'MbsAiSettings'),
 ]
 
 def configure(app):

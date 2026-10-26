@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build an RCC containing only the self-owned Mbs wordmark and its aliases."""
+"""Build the self-owned Mbs wordmark and AI ribbon icon resource archive."""
 import json
 from pathlib import Path
 import struct
@@ -7,15 +7,29 @@ import struct
 repo = Path(__file__).resolve().parent.parent
 spec = json.loads((repo/'assets/mbs-wordmark-paths.json').read_text())
 artwork = (repo/'assets/mbs-wordmark.svg').read_bytes()
+files = {path: artwork for path in spec['paths']}
+for icon in sorted((repo/'assets/mbs-ai-icons').glob('*.svg')):
+    for size in (16, 24, 32):
+        files[f'/icons_svg/{size}x{size}/{icon.name}'] = icon.read_bytes()
+
+def name_hash(value):
+    result = 0
+    for character in value:
+        result = (result << 4) + ord(character)
+        result ^= (result & 0xf0000000) >> 23
+        result &= 0x0fffffff
+    return result
+
+assert all(name_hash(name) == value for name, value in spec['nameHashes'].items())
 root = {'name': '', 'children': {}}
-for path in spec['paths']:
+for path, content in files.items():
     node = root
     for name in path.strip('/').split('/'):
         node = node['children'].setdefault(name, {'name': name, 'children': {}})
-    node['file'] = True
+    node['content'] = content
 nodes = [root]
 for node in nodes:
-    children = sorted(node['children'].values(), key=lambda child: spec['nameHashes'][child['name']])
+    children = sorted(node['children'].values(), key=lambda child: (name_hash(child['name']), child['name']))
     node['first'] = len(nodes)
     nodes.extend(children)
 names = bytearray()
@@ -24,14 +38,22 @@ for node in nodes:
     name = node['name']
     if name not in offsets:
         offsets[name] = len(names)
-        names.extend(struct.pack('>HI', len(name), spec['nameHashes'].get(name, 0)))
+        names.extend(struct.pack('>HI', len(name), name_hash(name)))
         names.extend(name.encode('utf-16be'))
 tree = bytearray()
+payload = bytearray()
+contents = {}
 for node in nodes:
-    tree.extend(struct.pack('>IH', offsets[node['name']], 0 if node.get('file') else 2))
-    tree.extend(struct.pack('>HHI', 0, 1, 0) if node.get('file') else
-                struct.pack('>II', len(node['children']), node['first']))
-payload = struct.pack('>I', len(artwork)) + artwork
+    is_file = 'content' in node
+    tree.extend(struct.pack('>IH', offsets[node['name']], 0 if is_file else 2))
+    if is_file:
+        content = node['content']
+        if content not in contents:
+            contents[content] = len(payload)
+            payload.extend(struct.pack('>I', len(content)) + content)
+        tree.extend(struct.pack('>HHI', 0, 1, contents[content]))
+    else:
+        tree.extend(struct.pack('>II', len(node['children']), node['first']))
 data = b'qres' + struct.pack('>4I', 1, 20+len(payload)+len(names), 20, 20+len(payload))
 output = repo/'build/mbs-wordmark.rcc'
 output.parent.mkdir(exist_ok=True)

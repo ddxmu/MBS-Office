@@ -64,10 +64,14 @@ if args.account_authorization_base_library:
     subprocess.run(['codesign','--force','--sign','-',str(library.parent.parent.parent)],check=True)
 subprocess.run(['python3',str(repo/'scripts/refresh-branding.py'),str(app)],check=True)
 res = 'Contents/Resources/MbsEngine.app/Contents/Resources/office6/res/'
-ribbon_paths = [res+'wppongmani.kui',res+'commands/wpp/ongmani/CT_MbsAI.kuip']
+ribbon_shell = res+'wppongmani.kui'
 subprocess.run(['python3',str(repo/'scripts/configure-presentation-ai.py'),str(app)],check=True)
-if not args.full_only and any((source/path).read_bytes() != (app/path).read_bytes() for path in ribbon_paths):
+subprocess.run(['python3',str(repo/'scripts/configure-ai-icons.py'),str(app)],check=True)
+if not args.full_only and (source/ribbon_shell).read_bytes() != (app/ribbon_shell).read_bytes():
     p.error('Presentation ribbon changes require --full-only; a module-only update cannot apply these UI changes.')
+for component in ('wps', 'et', 'wpp'):
+    name = res+f'commands/{component}/ongmani/CT_MbsAI.kuip'
+    paths[name] = app/name
 inner = plistlib.loads((engine/'Contents/Info.plist').read_bytes())
 inner['MbsModuleVersion'] = version
 (engine/'Contents/Info.plist').write_bytes(plistlib.dumps(inner))
@@ -89,7 +93,7 @@ with zipfile.ZipFile(package,'w',compression=zipfile.ZIP_DEFLATED,compresslevel=
     for name,data in {'manifest.json':(json.dumps(manifest,sort_keys=True)+'\n').encode(),**payload}.items():
         entry = zipfile.ZipInfo(name,(2020,1,1,0,0,0))
         entry.create_system = 3
-        entry.external_attr = (0o100644 if name == 'manifest.json' else 0o100755)<<16
+        entry.external_attr = (0o100644 if name == 'manifest.json' or name.endswith('.kuip') else 0o100755)<<16
         entry.compress_type = zipfile.ZIP_DEFLATED
         z.writestr(entry,data)
 shutil.copy2(app/'Contents/Resources/MbsModuleInstaller',assets/f'MbsModuleInstaller-{version}')

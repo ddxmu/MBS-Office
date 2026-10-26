@@ -34,6 +34,13 @@ int main(int argc,char **argv) { @autoreleasepool {
     NSDictionary *spec=[NSJSONSerialization JSONObjectWithData:[NSData dataWithContentsOfFile:@(argv[3])] options:0 error:nil];
     NSData *art=[NSData dataWithContentsOfFile:@(argv[2])];
     for (NSString *path in spec[@"paths"]) check([@":" stringByAppendingString:path],art);
+    NSString *icons=[@(argv[2]).stringByDeletingLastPathComponent stringByAppendingPathComponent:@"mbs-ai-icons"];
+    for (NSString *name in [NSFileManager.defaultManager contentsOfDirectoryAtPath:icons error:nil]) {
+        if (![name.pathExtension isEqualToString:@"svg"]) continue;
+        NSData *icon=[NSData dataWithContentsOfFile:[icons stringByAppendingPathComponent:name]];
+        for (NSNumber *size in @[@16,@24,@32])
+            check([NSString stringWithFormat:@":/icons_svg/%@x%@/%@",size,size,name],icon);
+    }
     check([@":" stringByAppendingString:@(argv[8])],[NSData dataWithContentsOfFile:@(argv[9])]);
-    puts("PASS embedded wordmark overrides all five old aliases; unrelated original resource unchanged");
+    puts("PASS embedded wordmark aliases and AI icons at all sizes; unrelated original resource unchanged");
 } }

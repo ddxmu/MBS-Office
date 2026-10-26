@@ -13,7 +13,7 @@ static bool MbsRegisterBrandingResource(const unsigned char *bytes) {
 }
 
 #ifndef MBS_BRAND_RESOURCE_TEST
-// Register our five wordmark aliases before the external theme archives load.
+// Register our wordmark aliases and AI icons before the external themes load.
 // Module-only updates then carry the same artwork as the full local installer.
 __attribute__((constructor)) static void MbsInstallBrandingResource(void) {
     Dl_info image; unsigned long size=0;
