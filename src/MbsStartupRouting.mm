@@ -2,6 +2,7 @@
 #import "MbsNativeLoginRecovery.h"
 #import "MbsStartupRouting.h"
 #import "MbsAccountEntry.h"
+#import "MbsRecentHomeView.h"
 #import <objc/runtime.h>
 #include <dlfcn.h>
 #include <mach-o/getsect.h>
@@ -347,6 +348,9 @@ static NSImage *MbsStartupRepairIcon(void) {
 }
 static void MbsInstallHomeRepairButton(NSWindow *window) {
     if (!window.contentView) return;
+#ifndef MBS_STARTUP_ROUTING_TEST
+    MbsUpdateRecentHomeView(window);
+#endif
     NSView *view=window.contentView;
     BOOL home=[window.title isEqualToString:@"首页"];
     // The two icon tiles are painted by Qt and omitted from its AX tree.
