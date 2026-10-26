@@ -2,6 +2,7 @@
 #import <objc/runtime.h>
 #import "MbsLocalAccount.h"
 #import "MbsAccountEntry.h"
+#import "MbsWebsiteRouting.h"
 #import "MbsUpdates.h"
 #import "MbsEditorAuthorization.h"
 #import "MbsNativeLoginRecovery.h"
@@ -100,6 +101,10 @@ static kso_qt::QString literal(NSString *value) {
 static BOOL isRemovedAssistantText(NSString *text) {
     return [text containsString:@"灵犀"] || [text containsString:@"超级派"];
 }
+static BOOL MbsIsAiPromotionText(NSString *text) {
+    return [text containsString:@"限时优惠"] &&
+        ([text containsString:@"大会员"] || [text containsString:@"AI权益"]);
+}
 static NSString *updated(NSString *text) {
     if (isRemovedAssistantText(text)) return @"";
     NSString *result = [text stringByReplacingOccurrencesOfString:@"免费使用企业版" withString:@"版本升级"];
@@ -118,9 +123,6 @@ static BOOL isLegacyAssistantHost(NSString *host) {
     return [host isEqualToString:@"lingxi.kdocs.cn"] ||
            [host isEqualToString:@"lingxi.wps.cn"];
 }
-static BOOL isLegacyUpgradeHost(NSString *host) {
-    return [host isEqualToString:@"plus.wps.cn"];
-}
 static BOOL isLegacyLoginURL(NSURL *url) {
     return [url.host.lowercaseString isEqualToString:@"account.wps.cn"] &&
            [url.path isEqualToString:@"/wpsmaclogin"];
@@ -134,12 +136,9 @@ static BOOL MbsWorkspaceOpenURL(id self, SEL selector, NSURL *url) {
         return YES;
     }
     if (isLegacyAssistantHost(host)) return YES;
-    if (isLegacyUpgradeHost(host)) {
-        MbsShowUpdates();
-        return YES;
-    }
     if (isBlockedRemoteHost(host)) return YES;
     if (!MbsWorkspaceOpenURLOriginal) return NO;
+    if (MbsIsLegacyWebsiteURL(url)) url=[NSURL URLWithString:MbsWebsiteHome];
     return ((BOOL (*)(id, SEL, NSURL *))MbsWorkspaceOpenURLOriginal)(self, selector, url);
 }
 static void InstallMbsWorkspaceURLHook(void) {
@@ -161,7 +160,7 @@ static void MbsScheduleAccountEntryRefresh(void);
 static void labelText(kso_qt::QLabel*label,const kso_qt::QString&text) {
     NSString *value=read(text),*replacement=accountText((kso_qt::QObject *)label,updated(value));
     if(![value isEqualToString:replacement])label->setText(literal(replacement));else label->setText(text);
-    if ([value containsString:@"当前编辑内容尚未保存"]) MbsScheduleAccountEntryRefresh();
+    if ([value containsString:@"当前编辑内容尚未保存"] || MbsIsAiPromotionText(value)) MbsScheduleAccountEntryRefresh();
 }
 static void buttonText(kso_qt::QAbstractButton*button,const kso_qt::QString&text) {
     NSString *value=read(text),*replacement=accountText((kso_qt::QObject *)button,updated(value));
@@ -180,16 +179,43 @@ static NSString *className(kso_qt::QObject*object) {
     const char *name=meta?meta->className():nullptr;
     return name?[NSString stringWithUTF8String:name]:@"";
 }
+static BOOL MbsIsPresentationThemeEntry(kso_qt::QObject *object) {
+    if (![className(object) isEqualToString:@"KStatusButton"] ||
+        (![property(object,"text") isEqualToString:@"WPS"] &&
+         ![property(object,"mbsResourceEntry") isEqualToString:@"true"])) return NO;
+    void *data=nullptr; memcpy(&data,(char *)object+8,8);
+    auto *parent=data?*(kso_qt::QObject **)((char *)data+16):nullptr;
+    if (!parent || ![className(parent) isEqualToString:@"KStatusBar"]) return NO;
+    memcpy(&data,(char *)parent+8,8);
+    auto *window=data?*(kso_qt::QObject **)((char *)data+16):nullptr;
+    return window && [className(window) isEqualToString:@"KxWppMainWindow"];
+}
 static BOOL MbsIsLegacyAccountPanel(NSString *name) {
     return [name isEqualToString:@"KPromeAccountPanelWidget"] ||
         [name isEqualToString:@"KPromeAccountPanelKeletonWidgetV2"];
 }
+static BOOL MbsIsAiPromotionBanner(kso_qt::QWidget *widget,NSString *name) {
+    const char *symbol=nullptr;
+    if ([name isEqualToString:@"kd::KDBanner"]) symbol="_ZNK2kd8KDBanner14getContentTextEv";
+    else if ([name isEqualToString:@"KxDrTipContentWidget"]) symbol="_ZN20KxDrTipContentWidget21getCurTipsContentTextEv";
+    if (!symbol) return NO;
+    // These exported getters return the same nontrivial QString ABI as
+    // QVariant::toString above. Leave every non-promotional notice intact.
+    auto getText=(kso_qt::QString (*)(const void *))dlsym(RTLD_DEFAULT,symbol);
+    if (!getText) return NO;
+    auto text=getText(widget);
+    BOOL promotional=MbsIsAiPromotionText(read(text));
+    text=kso_qt::QString(&empty);
+    return promotional;
+}
 static void widgetSetVisible(kso_qt::QWidget *widget,bool visible) {
-    widget->setVisible(visible && !MbsIsLegacyAccountPanel(className(widget)));
+    NSString *kind=className(widget);
+    widget->setVisible(visible && !MbsIsLegacyAccountPanel(kind) && !MbsIsAiPromotionBanner(widget,kind));
     if (visible) MbsScheduleAccountEntryRefresh();
 }
 static void widgetShow(kso_qt::QWidget *widget) {
-    if (!MbsIsLegacyAccountPanel(className(widget))) widget->show();
+    NSString *kind=className(widget);
+    if (!MbsIsLegacyAccountPanel(kind) && !MbsIsAiPromotionBanner(widget,kind)) widget->show();
     MbsScheduleAccountEntryRefresh();
 }
 static void MbsRefreshNativeAvatar(kso_qt::QWidget *widget,NSString *title,NSString *email) {
@@ -246,8 +272,18 @@ static void MbsRefreshAccountEntries(void) {
     for (int index=list->begin;index<list->end;++index) {
         auto *widget=list->items[index];
         NSString *kind=className(widget);
+        if (MbsIsPresentationThemeEntry(widget)) {
+            if (![property(widget,"mbsResourceEntry") isEqualToString:@"true"])
+                widget->setProperty("mbsResourceEntry",kso_qt::QVariant(true));
+            if (![property(widget,"text") isEqualToString:@"WPS"]) continue;
+            if (kso_qt::QAbstractButton::staticMetaObject.cast(widget))
+                ((kso_qt::QAbstractButton *)widget)->setText(literal(@""));
+            else if (kso_qt::QLabel::staticMetaObject.cast(widget))
+                ((kso_qt::QLabel *)widget)->setText(literal(@""));
+            continue;
+        }
         if ([kind isEqualToString:@"KxPdfView"]) { MbsRefreshPdfTrialNotice(widget); continue; }
-        if (MbsIsLegacyAccountPanel(kind)) { widget->setVisible(false); continue; }
+        if (MbsIsLegacyAccountPanel(kind) || MbsIsAiPromotionBanner(widget,kind)) { widget->setVisible(false); continue; }
         if ([kind isEqualToString:@"KPromeHeaderAvatar"]) {
             MbsRefreshNativeAvatar(widget,title,email); continue;
         }
@@ -316,6 +352,9 @@ static bool routeClick(kso_qt::QObject*receiver,kso_qt::QEvent*event) {
             kso_qt::QObject*object=receiver;
             for(int depth=0;object&&depth<7;++depth) {
                 NSString *name=className(object),*text=property(object,"text");
+                if (MbsIsPresentationThemeEntry(object)) {
+                    [NSWorkspace.sharedWorkspace openURL:[NSURL URLWithString:MbsWebsiteHome]]; return true;
+                }
                 if ((depth == 0 && MbsIsNativeAccountEntry(object,text)) || [name isEqualToString:@"KPromeHeaderAvatar"]) {
                     MbsOpenAccountEntry(); return true;
                 }
@@ -402,11 +441,11 @@ static bool desktopOpenUrl(const void *url) {
             return true;
         }
         if (isLegacyAssistantHost(host)) return true;
-        if (isLegacyUpgradeHost(host)) {
-            MbsShowUpdates();
+        if (isBlockedRemoteHost(host)) return true;
+        if (MbsIsLegacyWebsiteHost(host)) {
+            [NSWorkspace.sharedWorkspace openURL:[NSURL URLWithString:MbsWebsiteHome]];
             return true;
         }
-        if (isBlockedRemoteHost(host)) return true;
     }
     return desktopOpenUrlOriginal(url);
 }

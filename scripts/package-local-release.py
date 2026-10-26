@@ -69,7 +69,7 @@ subprocess.run(['python3',str(repo/'scripts/configure-presentation-ai.py'),str(a
 subprocess.run(['python3',str(repo/'scripts/configure-ai-icons.py'),str(app)],check=True)
 if not args.full_only and (source/ribbon_shell).read_bytes() != (app/ribbon_shell).read_bytes():
     p.error('Presentation ribbon changes require --full-only; a module-only update cannot apply these UI changes.')
-for component in ('wps', 'et', 'wpp'):
+for component in ('wps', 'et', 'wpp', 'pdf'):
     name = res+f'commands/{component}/ongmani/CT_MbsAI.kuip'
     paths[name] = app/name
 inner = plistlib.loads((engine/'Contents/Info.plist').read_bytes())

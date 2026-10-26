@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Mbs Office，让灵感连接每一份文档。文字、表格、演示、PDF 与 AI 助手，在熟悉的工作空间中完成创作。下载 macOS Apple Silicon 版本。">
+  <meta name="theme-color" content="#f7f7fc">
+  <title>Mbs Office — 让灵感连接每一份文档</title>
+  <link rel="icon" href="assets/logo.png">
+  <link rel="stylesheet" href="style.css">
+  <script src="main.js" defer></script>
+</head>
+<body>
+  <header class="header">
+    <a class="brand" href="#home" aria-label="Mbs Office 首页"><img src="assets/logo.png" width="36" height="36" alt=""><span>Mbs Office</span></a>
+    <nav aria-label="主导航"><a href="#workspace">产品体验</a><a href="#ai">AI 助手</a><a href="#pdf">PDF 工具</a><a href="#download">下载</a></nav>
+    <a class="nav-download" href="#download">下载 Mbs Office <span aria-hidden="true">↗</span></a>
+  </header>
+  <main>
+    <section class="hero" id="home">
+      <div class="hero-content">
+        <span class="eyebrow"><i></i> 为灵感，也为每一天的工作</span>
+        <h1>让灵感连接<br><span>每一份文档</span></h1>
+        <p class="hero-description">从第一个想法，到最后一次保存。<br>文字、表格、演示与 PDF，都在 Mbs Office。</p>
+        <div class="hero-actions"><a class="button primary" href="https://pan.baidu.com/s/1dYIrzAzolJcCgZvXhkpXSA?pwd=gxcx" target="_blank" rel="noopener noreferrer"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m-5-5 5 5 5-5M4 16v5h16v-5"/></svg>下载 macOS ARM 版</a><a class="text-link" href="#workspace">探索 Mbs <span aria-hidden="true">↓</span></a></div>
+        <div class="download-note">适用于 Apple Silicon 芯片 Mac · 百度网盘提取码 <button class="copy-code" data-copy="gxcx" aria-label="复制提取码 gxcx">gxcx <span aria-hidden="true">▢</span></button></div>
+      </div>
+      <div class="hero-art" aria-label="Mbs Office 文档界面示意">
+        <div class="float-badge badge-one"><b class="file-icon blue">W</b> 想法，落笔成章</div>
+        <div class="app-window">
+          <div class="window-bar"><span class="traffic"><i></i><i></i><i></i></span><span><img src="assets/logo.png" alt="" width="17" height="17"> Mbs Office</span><small>工作空间</small></div>
+          <div class="window-body"><aside><div class="mini-brand">Mbs<span>工作空间</span></div><div class="side-active">◷ &nbsp; 最近文档</div><div>▤ &nbsp; 我的文档</div><div>✦ &nbsp; AI 助手</div><div class="side-bottom">让创作更从容</div></aside><div class="workspace"><div class="workspace-heading"><div><small>每一份认真，都值得被记录</small><h3>你好，开始今天的创作</h3></div><span class="avatar">M</span></div><div class="quick-apps"><span><b class="file-icon blue">W</b>文字文档</span><span><b class="file-icon green">X</b>电子表格</span><span><b class="file-icon orange">P</b>演示文稿</span><span><b class="file-icon red">PDF</b>PDF 文档</span></div><div class="document-preview"><div class="document-head"><b>新想法，从这里开始</b><span>文档示意</span></div><div class="preview-layout"><article><small>MBS OFFICE / WORK BETTER</small><h4>把灵感，<br>变成下一步行动。</h4><p>清晰表达每一个想法，<br>从容推进每一项工作。</p><div class="fake-lines"><i></i><i></i><i></i></div></article><div class="preview-chart"><span>本周计划</span><div><i></i><i></i><i></i><i></i><i></i></div><small>一步一步，抵达目标</small></div></div></div></div></div>
+        </div>
+        <div class="float-badge badge-two"><span class="sparkle">✦</span><div><b>你的灵感，随时继续</b><small>文字 · 表格 · 演示 · PDF</small></div></div>
+      </div>
+      <div class="hero-foot"><span>专注创作，轻松办公</span><div><b>文字</b><i></i><b>表格</b><i></i><b>演示</b><i></i><b>PDF</b><i></i><b>AI</b></div></div>
+    </section>
+    <section class="section product-section" id="workspace">
+      <div class="section-heading"><span class="eyebrow">一个工作空间，更多可能</span><h2>熟悉的办公方式，<br>更流畅的创作体验。</h2><p>让不同格式的文档，各得其所。</p></div>
+      <div class="product-tabs" role="tablist" aria-label="产品功能"><button id="tab-word" class="active" role="tab" aria-selected="true" aria-controls="product-panel" data-product="word"><span class="dot blue-bg"></span>文字文档</button><button id="tab-sheet" role="tab" aria-selected="false" aria-controls="product-panel" data-product="sheet"><span class="dot green-bg"></span>电子表格</button><button id="tab-slide" role="tab" aria-selected="false" aria-controls="product-panel" data-product="slide"><span class="dot orange-bg"></span>演示文稿</button><button id="tab-pdf" role="tab" aria-selected="false" aria-controls="product-panel" data-product="pdf"><span class="dot red-bg"></span>PDF 文档</button></div>
+      <div class="product-panel" id="product-panel" role="tabpanel" aria-labelledby="tab-word">
+        <div class="product-copy"><span class="panel-kicker" id="product-kicker">文字 / WRITE</span><h3 id="product-title">从容落笔，<br>让表达更有力量。</h3><p id="product-description">从日常记录到正式报告，在熟悉的编辑界面中整理思路、调整排版，完成每一份用心的文档。</p><a class="text-link" href="#download">开始创作 <span aria-hidden="true">↗</span></a></div>
+        <div class="feature-demo" id="feature-demo" data-kind="word"><div class="demo-toolbar"><img src="assets/logo.png" width="23" height="23" alt=""><b>Mbs Office</b><span id="demo-file">项目方案.docx</span><span class="demo-save">本地文档</span></div><div class="demo-ribbon">开始　 插入　 页面　 审阅　 视图　 AI</div><div class="demo-sheet"><span class="demo-label" id="demo-label">PROJECT PROPOSAL</span><h4 id="demo-title">每一个想法，都有新的可能</h4><p id="demo-subtitle">项目计划与工作安排</p><div class="demo-rule"></div><div class="demo-content" id="demo-content"><h5>01 &nbsp; 明确方向，专注重要的事</h5><p>用清晰的结构梳理思路，用简洁的表达传递价值。</p><div class="fake-lines"><i></i><i></i><i></i></div><h5>02 &nbsp; 从想法，到行动</h5><div class="fake-lines"><i></i><i></i></div></div><small class="demo-caption">Mbs 产品界面示意</small></div></div>
+      </div>
+    </section>
+    <section class="ai-section section" id="ai"><div class="ai-art"><span class="orbit orbit-one"></span><span class="orbit orbit-two"></span><img src="assets/assistant.png" alt="Mbs AI 助手机器人" loading="lazy"><span class="ai-bubble bubble-one">把想法写清楚 <b>✦</b></span><span class="ai-bubble bubble-two">给灵感，多一点可能</span></div><div class="ai-copy"><span class="eyebrow">Mbs AI 助手</span><h2>灵感有回应，<br>创作有帮手。</h2><p>在文档旁边，让 AI 帮你整理思路、润色表达、翻译内容和提炼重点。把更多精力，留给真正重要的想法。</p><div class="ai-list"><span>✦ &nbsp; 润色与改写</span><span>✦ &nbsp; 内容总结</span><span>✦ &nbsp; 翻译与问答</span><span>✦ &nbsp; 演示创作</span></div><small>AI 功能按应用内配置及所连接服务使用。</small></div></section>
+    <section class="section pdf-section" id="pdf"><div class="section-heading"><span class="eyebrow">文档流转，更进一步</span><h2>PDF，也能从容处理。</h2><p>阅读、编辑与批注，让文档工作衔接得更自然。</p></div><div class="pdf-grid"><article><div class="feature-icon">T<span>↖</span></div><h3>编辑内容</h3><p>修改文字与页面内容，完成调整后保存文档。</p></article><article><div class="feature-icon stamp-icon">✓</div><h3>批注与图章</h3><p>标注重点、添加图章，让每一次反馈更清楚。</p></article><article><div class="feature-icon">A<span>≈</span></div><h3>水印与页面</h3><p>添加水印，整理页面，完成文档交付前的细节。</p></article></div></section>
+    <section class="download-section section" id="download"><div><span class="eyebrow">现在，开启新的创作</span><h2>下一份好文档，<br>从 Mbs Office 开始。</h2><p>macOS Apple Silicon（ARM）版</p></div><div class="download-card"><img src="assets/logo.png" alt="Mbs Office" width="76" height="76"><h3>Mbs Office for Mac</h3><p>适用于搭载 Apple Silicon 芯片的 Mac</p><a class="button primary" href="https://pan.baidu.com/s/1dYIrzAzolJcCgZvXhkpXSA?pwd=gxcx" target="_blank" rel="noopener noreferrer">前往百度网盘下载 <span aria-hidden="true">↗</span></a><div class="download-code">提取码 <button class="copy-code" data-copy="gxcx">gxcx <span aria-hidden="true">▢</span></button></div><small>下载后打开安装包，按提示完成安装。</small></div></section>
+  </main>
+  <footer><a class="brand" href="#home"><img src="assets/logo.png" alt="" width="30" height="30"><span>Mbs Office</span></a><p>让灵感连接每一份文档。</p><div><a href="https://ttys.ddxmu.com/" target="_blank" rel="noopener noreferrer">Mbs 服务</a><a href="#download">下载客户端</a><a href="#home">返回顶部 ↑</a></div><small>© 2026 Mbs Office</small></footer>
+  <div class="toast" role="status" aria-live="polite"></div>
+</body>
+</html>

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build the self-owned Mbs wordmark and AI ribbon icon resource archive."""
+"""Build the self-owned Mbs wordmark, AI and resource icon archive."""
 import json
 from pathlib import Path
 import struct
@@ -11,6 +11,8 @@ files = {path: artwork for path in spec['paths']}
 for icon in sorted((repo/'assets/mbs-ai-icons').glob('*.svg')):
     for size in (16, 24, 32):
         files[f'/icons_svg/{size}x{size}/{icon.name}'] = icon.read_bytes()
+files['/icons_svg/16x16/tpdocerresourceshop.svg'] = (
+    repo/'assets/mbs-resource-icons/tpdocerresourceshop.svg').read_bytes()
 
 def name_hash(value):
     result = 0

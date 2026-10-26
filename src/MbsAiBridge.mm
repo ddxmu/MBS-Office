@@ -7,6 +7,7 @@
 #include "MbsLocalAccount.h"
 #include "MbsUpdates.h"
 #include "MbsAbout.h"
+#include "MbsWebsiteRouting.h"
 
 // ABI pinned to WPS 12.1.25867 / QtKso 5.12.12, arm64.
 namespace kso_qt {
@@ -66,9 +67,9 @@ static const struct { StringHeader header; uint16_t text[1]; }
 static const struct { StringHeader header; uint16_t text[5]; }
     copyString = {{-1, 4, 0, 0, 24}, {'C', 'o', 'p', 'y', 0}};
 
-static NSString *commandId(KCommand *command)
+static NSString *commandProperty(KCommand *command,const char *key)
 {
-    auto property = reinterpret_cast<kso_qt::QObject *>(command)->property("id");
+    auto property = reinterpret_cast<kso_qt::QObject *>(command)->property(key);
     auto value = property.toString();
     const auto *header = static_cast<const StringHeader *>(value.data);
     NSString *result = nil;
@@ -197,8 +198,19 @@ static bool aiSendEvent(kso_qt::QObject *receiver, kso_qt::QEvent *event)
     if (!command) return kso_qt::QCoreApplication::sendEvent(receiver, event);
 
     @autoreleasepool {
-        NSString *identifier = commandId(command);
+        NSString *identifier = commandProperty(command,"id");
         debugCommand(identifier);
+        if ([identifier isEqualToString:@"TpDocerResourceShop"] ||
+            [identifier isEqualToString:@"wppStatusDesignInfo"] ||
+            [identifier isEqualToString:@"changeThemeSideWidget"] ||
+            [identifier isEqualToString:@"changeThemeModalWidget"] ||
+            MbsIsLegacyWebsiteURL([NSURL URLWithString:commandProperty(command,"url")])) {
+            bytes[32] = 0;
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [NSWorkspace.sharedWorkspace openURL:[NSURL URLWithString:MbsWebsiteHome]];
+            });
+            return true;
+        }
         const char *operation = nullptr;
         for (const auto &entry : aiCommands) {
             if ([identifier isEqualToString:[NSString stringWithUTF8String:entry.identifier]]) {

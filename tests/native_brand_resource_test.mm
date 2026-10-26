@@ -25,12 +25,12 @@ static void check(NSString *path,NSData *expected) {
     resourceDtor(resource);
 }
 int main(int argc,char **argv) { @autoreleasepool {
-    assert(argc==10);
+    assert(argc==11);
     NSData *rcc=nil;
     if ([@(argv[1]) hasSuffix:@".dylib"]) assert(dlopen(argv[1],RTLD_NOW|RTLD_LOCAL));
     else { rcc=[NSData dataWithContentsOfFile:@(argv[1])]; assert(MbsRegisterBrandingResource((const unsigned char *)rcc.bytes)); }
     // Original archives register after the embedded wordmark, exactly as at startup.
-    for (int i=4;i<8;++i) assert(registerFile(string(@(argv[i])),{&MbsEmptyResourceString}));
+    for (int i=4;i<9;++i) assert(registerFile(string(@(argv[i])),{&MbsEmptyResourceString}));
     NSDictionary *spec=[NSJSONSerialization JSONObjectWithData:[NSData dataWithContentsOfFile:@(argv[3])] options:0 error:nil];
     NSData *art=[NSData dataWithContentsOfFile:@(argv[2])];
     for (NSString *path in spec[@"paths"]) check([@":" stringByAppendingString:path],art);
@@ -41,6 +41,8 @@ int main(int argc,char **argv) { @autoreleasepool {
         for (NSNumber *size in @[@16,@24,@32])
             check([NSString stringWithFormat:@":/icons_svg/%@x%@/%@",size,size,name],icon);
     }
-    check([@":" stringByAppendingString:@(argv[8])],[NSData dataWithContentsOfFile:@(argv[9])]);
-    puts("PASS embedded wordmark aliases and AI icons at all sizes; unrelated original resource unchanged");
+    NSString *resourceIcon=[@(argv[2]).stringByDeletingLastPathComponent stringByAppendingPathComponent:@"mbs-resource-icons/tpdocerresourceshop.svg"];
+    check(@":/icons_svg/16x16/tpdocerresourceshop.svg",[NSData dataWithContentsOfFile:resourceIcon]);
+    check([@":" stringByAppendingString:@(argv[9])],[NSData dataWithContentsOfFile:@(argv[10])]);
+    puts("PASS embedded wordmark, AI and resource icons; unrelated original resource unchanged");
 } }

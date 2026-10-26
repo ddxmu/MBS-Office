@@ -8,7 +8,7 @@ import xml.etree.ElementTree as ET
 def configure(app):
     resources = app / 'Contents/Resources/MbsEngine.app/Contents/Resources/office6/res/commands'
     assets = Path(__file__).resolve().parent.parent / 'assets/mbs-ai-icons'
-    for component in ('wps', 'et', 'wpp'):
+    for component in ('wps', 'et', 'wpp', 'pdf'):
         path = resources / component / 'ongmani/CT_MbsAI.kuip'
         original = path.read_text()
         before = ET.fromstring(original)
