@@ -1,5 +1,45 @@
 #import "MbsRecentHomeView.h"
 #import "MbsRecentDocuments.h"
+#import "MbsAccountEntry.h"
+
+@interface MbsHomeAccountButton : NSButton
+- (void)refreshAccount:(NSNotification *)notification;
+@end
+@implementation MbsHomeAccountButton
+- (instancetype)initWithFrame:(NSRect)frame {
+    if (!(self=[super initWithFrame:frame])) return nil;
+    self.bordered=NO;
+    self.font=[NSFont systemFontOfSize:14];
+    self.target=self; self.action=@selector(openAccount:);
+    self.accessibilityLabel=@"Mbs 账号";
+    [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(refreshAccount:)
+        name:@"MbsLocalAccountDidChange" object:nil];
+    [self refreshAccount:nil];
+    return self;
+}
+- (void)dealloc { [NSNotificationCenter.defaultCenter removeObserver:self]; }
+- (void)refreshAccount:(NSNotification *)notification {
+    self.title=MbsAccountEntryTitle();
+    self.toolTip=@"查看 Mbs 账号与授权";
+    self.needsDisplay=YES;
+}
+- (void)drawRect:(NSRect)dirtyRect {
+    NSDictionary *attributes=@{NSFontAttributeName:self.font,NSForegroundColorAttributeName:NSColor.systemBlueColor};
+    NSSize textSize=[self.title sizeWithAttributes:attributes];
+    CGFloat iconSize=17, gap=6, width=iconSize+gap+textSize.width;
+    CGFloat x=MAX(0,(NSWidth(self.bounds)-width)/2);
+    CGFloat y=(NSHeight(self.bounds)-iconSize)/2;
+    [NSColor.systemBlueColor setFill];
+    [[NSBezierPath bezierPathWithOvalInRect:NSMakeRect(x,y,iconSize,iconSize)] fill];
+    [NSColor.whiteColor setFill];
+    CGFloat headY=self.isFlipped ? y+3 : y+9;
+    CGFloat bodyY=self.isFlipped ? y+9 : y+3;
+    [[NSBezierPath bezierPathWithOvalInRect:NSMakeRect(x+6,headY,5,5)] fill];
+    [[NSBezierPath bezierPathWithRoundedRect:NSMakeRect(x+3.5,bodyY,10,5) xRadius:2.5 yRadius:2.5] fill];
+    [self.title drawAtPoint:NSMakePoint(x+iconSize+gap,(NSHeight(self.bounds)-textSize.height)/2) withAttributes:attributes];
+}
+- (void)openAccount:(id)sender { MbsOpenAccountEntry(); }
+@end
 
 @interface MbsRecentHomeView : NSView <NSTableViewDataSource,NSTableViewDelegate>
 @property NSArray<NSDictionary *> *records;
@@ -123,6 +163,16 @@ void MbsUpdateRecentHomeView(NSWindow *window) {
     const NSInteger tag=0x4d425352+100;
     MbsRecentHomeView *existing=(MbsRecentHomeView *)[content viewWithTag:tag];
     BOOL home=[window.title isEqualToString:@"首页"];
+    const NSInteger accountTag=0x4d425352+101;
+    MbsHomeAccountButton *account=(MbsHomeAccountButton *)[content viewWithTag:accountTag];
+    if (!account && home) {
+        account=[[MbsHomeAccountButton alloc] initWithFrame:NSMakeRect(MAX(0,NSWidth(content.bounds)-110),
+            content.isFlipped ? 52 : NSHeight(content.bounds)-84,104,32)];
+        account.tag=accountTag;
+        account.autoresizingMask=NSViewMinXMargin | (content.isFlipped ? NSViewMaxYMargin : NSViewMinYMargin);
+        [content addSubview:account positioned:NSWindowAbove relativeTo:nil];
+    }
+    account.hidden=!home;
     if (!existing && home) {
         NSRect frame=NSMakeRect(345,content.isFlipped ? 104 : 12,
             MAX(0,NSWidth(content.bounds)-357),MAX(0,NSHeight(content.bounds)-116));
