@@ -1,4 +1,4 @@
-#import <Foundation/Foundation.h>
+#import <AppKit/AppKit.h>
 #import <Security/Security.h>
 #import <CommonCrypto/CommonDigest.h>
 #include <math.h>
@@ -7,8 +7,10 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include <dlfcn.h>
+#include <mach-o/dyld.h>
 #import "MbsEditorAuthorization.h"
 #import "MbsEditorLicenseKey.h"
+#import "MbsNativeAccountRouting.h"
 
 static unsigned MbsLegacyKeychainDenialCount(void) {
     auto count = (unsigned (*)())dlsym(RTLD_DEFAULT,"MbsLegacyKeychainDeniedCount");
@@ -189,6 +191,9 @@ static NSArray *MbsNativeAuthorizationStates(void) {
 }
 - (void)notify {
     BOOL verified = MbsHasVerifiedEditorLicense();
+#ifndef MBS_EDITOR_AUTH_TESTS
+    MbsSyncForceLoginAccount();
+#endif
     [self.expiryTimer invalidate]; self.expiryTimer = nil;
     if (!verified && [self.activationState isEqual:@"active"]) {
         self.activationState = @"expired";
@@ -385,3 +390,37 @@ __attribute__((constructor)) static void MbsRestoreEditorGrant(void) { @autorele
         if ([value.activationState isEqual:@"device_limit"]) value.status = @"授权设备已达上限，请联系管理员";
     }
 } }
+
+#ifndef MBS_EDITOR_AUTH_TESTS
+static void MbsRefreshLoadedEditorGrant(void) {
+    static BOOL pending;
+    if (pending) return;
+    pending = YES;
+    dispatch_async(dispatch_get_main_queue(),^{
+        pending = NO;
+        if (MbsHasVerifiedEditorLicense()) {
+            [MbsEditorAuthorization.shared notify];
+            MbsRepublishNativeAccountState();
+        }
+    });
+}
+static void MbsEditorGrantImageLoaded(const struct mach_header *header, intptr_t slide) {
+    (void)slide;
+    Dl_info info;
+    if (!dladdr(header,&info) || !info.dli_fname || !strstr(info.dli_fname,"/office6/libauth.dylib")) return;
+    char *path = strdup(info.dli_fname);
+    dispatch_async(dispatch_get_main_queue(),^{
+        NSString *loaded = [NSString stringWithUTF8String:path]; free(path);
+        NSString *expected = [NSBundle.mainBundle.bundlePath stringByAppendingPathComponent:@"Contents/Frameworks/office6/libauth.dylib"];
+        if ([loaded.stringByStandardizingPath isEqual:expected.stringByStandardizingPath]) MbsRefreshLoadedEditorGrant();
+    });
+}
+__attribute__((constructor)) static void MbsInstallLateEditorGrantSync(void) {
+    _dyld_register_func_for_add_image(MbsEditorGrantImageLoaded);
+    dispatch_async(dispatch_get_main_queue(),^{
+        [NSNotificationCenter.defaultCenter addObserverForName:NSWindowDidBecomeKeyNotification object:nil queue:nil
+            usingBlock:^(NSNotification *note) { MbsRefreshLoadedEditorGrant(); }];
+        MbsRefreshLoadedEditorGrant();
+    });
+}
+#endif

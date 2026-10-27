@@ -181,6 +181,8 @@ static void MbsAuthSyncObject(void *manager,uintptr_t image) {
 static void MbsAuthRefreshRegistered(void) {
     if (!NSThread.isMainThread) return;
     MbsAuthReadExpiry();
+    bool active=MbsHasVerifiedEditorLicense();
+    if (MbsNativeSettingsActive!=(int)active) { MbsAuthWriteSettings(active); MbsNativeSettingsActive=active; }
     for (NSValue *key in MbsNativeAuthObjects.allKeys) {
         MbsNativeAuthRegistration *record=MbsNativeAuthObjects[key];
         if (!record->_weak || __atomic_load_n(&record->_weak->strong,__ATOMIC_ACQUIRE)==0) {

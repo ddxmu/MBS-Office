@@ -40,6 +40,12 @@ static void notify(void) {
 int main(void) { @autoreleasepool {
     unsigned char unreadable;
     assert(!MbsAuthRead((void *)1,&unreadable,1));
+    // The website grant can arrive before any native manager exists.
+    MbsAuthInstallObserver();
+    signedActive=true; activationExpiry=NSDate.date.timeIntervalSince1970+365*86400;
+    notify(); assert(!readOnly && settingsWrites==1 && !MbsNativeAuthObjects.count);
+    signedActive=false; notify(); assert(readOnly && settingsWrites==2);
+    settingsWrites=0; MbsNativeSettingsActive=-1;
     FakeManager manager; objects[manager.bytes]=&manager;
     call(manager,MbsNativeAuthSync);
     assert(readOnly && settingsWrites==1);

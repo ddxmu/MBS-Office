@@ -2,7 +2,7 @@
 #include "../src/MbsNativeAccountRouting.mm"
 
 static bool editing=true, killOnLicense;
-static unsigned logins, logouts, licenseEvents, authEvents;
+static unsigned logins, logouts, licenseEvents, authEvents, userEvents;
 static NSString *account=@"fixture@example.invalid";
 static MbsAccountWeakData firstWeak={1,-1,nullptr}, secondWeak={1,-1,nullptr};
 static int firstProxy, secondProxy;
@@ -18,6 +18,8 @@ void MbsAccountLicenseChanged(void *proxy) {
     assert(NSThread.isMainThread); ++licenseEvents;
     if (killOnLicense) (proxy==&firstProxy ? firstWeak : secondWeak).strong=0;
 }
+void MbsAccountLoginChanged(void *) {}
+void MbsAccountUserChanged(void *) { assert(NSThread.isMainThread); ++userEvents; }
 void MbsAccountAuthChanged(void *) { assert(NSThread.isMainThread); ++authEvents; }
 bool MbsHasVerifiedEditorLicense(void) { return editing; }
 const char *MbsCurrentAccountEmail(void) { return account ? strdup(account.UTF8String) : nullptr; }
@@ -39,17 +41,20 @@ static void pump(void) {
     while (end.timeIntervalSinceNow>0) [NSRunLoop.mainRunLoop runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.002]];
 }
 int main(void) { @autoreleasepool {
+    assert(MbsForceAccountLoggedIn(nullptr));
+    editing=false; assert(!MbsForceAccountLoggedIn(nullptr)); editing=true;
     MbsRegisterNativeAccountRouting();
-    assert(MbsNativeAccountRoute(&firstProxy,1)==1 && logins==1);
+    assert(MbsNativeAccountRoute(&firstProxy,1)==1 && logins==0);
+    editing=false; assert(MbsNativeAccountRoute(&firstProxy,1)==1 && logins==1); editing=true;
     assert(!MbsNativeAccountRoute(&firstProxy,3) && !MbsNativeAccountRoute(&firstProxy,4));
     query(@"forbidEditInForceLogin",true,false);
     editing=false; query(@"forbidEditInForceLogin",true,true);
     query(@"unrelatedCloudProperty",false,false);
     query(@"forbidEditInForceLoginExtra",false,false);
     [NSNotificationCenter.defaultCenter postNotificationName:@"MbsEditorAuthorizationDidChange" object:nil]; pump();
-    assert(licenseEvents==1 && authEvents==1);
+    assert(licenseEvents==1 && authEvents==1 && userEvents==1);
     [NSNotificationCenter.defaultCenter postNotificationName:@"MbsEditorAuthorizationDidChange" object:nil]; pump();
-    assert(licenseEvents==1 && authEvents==1);
+    assert(licenseEvents==1 && authEvents==1 && userEvents==1);
     editing=true;
     [NSNotificationCenter.defaultCenter postNotificationName:@"MbsEditorAuthorizationDidChange" object:nil]; pump();
     assert(licenseEvents==2 && authEvents==2);
