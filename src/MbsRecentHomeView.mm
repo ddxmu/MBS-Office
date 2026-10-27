@@ -24,18 +24,20 @@
     self.needsDisplay=YES;
 }
 - (void)drawRect:(NSRect)dirtyRect {
+    [[NSColor windowBackgroundColor] setFill];
+    NSRectFill(self.bounds);
     NSDictionary *attributes=@{NSFontAttributeName:self.font,NSForegroundColorAttributeName:NSColor.systemBlueColor};
     NSSize textSize=[self.title sizeWithAttributes:attributes];
-    CGFloat iconSize=17, gap=6, width=iconSize+gap+textSize.width;
+    CGFloat iconSize=22, gap=6, width=iconSize+gap+textSize.width;
     CGFloat x=MAX(0,(NSWidth(self.bounds)-width)/2);
     CGFloat y=(NSHeight(self.bounds)-iconSize)/2;
     [NSColor.systemBlueColor setFill];
     [[NSBezierPath bezierPathWithOvalInRect:NSMakeRect(x,y,iconSize,iconSize)] fill];
     [NSColor.whiteColor setFill];
-    CGFloat headY=self.isFlipped ? y+3 : y+9;
-    CGFloat bodyY=self.isFlipped ? y+9 : y+3;
-    [[NSBezierPath bezierPathWithOvalInRect:NSMakeRect(x+6,headY,5,5)] fill];
-    [[NSBezierPath bezierPathWithRoundedRect:NSMakeRect(x+3.5,bodyY,10,5) xRadius:2.5 yRadius:2.5] fill];
+    CGFloat headY=self.isFlipped ? y+4 : y+12;
+    CGFloat bodyY=self.isFlipped ? y+12 : y+4;
+    [[NSBezierPath bezierPathWithOvalInRect:NSMakeRect(x+8,headY,6,6)] fill];
+    [[NSBezierPath bezierPathWithRoundedRect:NSMakeRect(x+5,bodyY,12,6) xRadius:3 yRadius:3] fill];
     [self.title drawAtPoint:NSMakePoint(x+iconSize+gap,(NSHeight(self.bounds)-textSize.height)/2) withAttributes:attributes];
 }
 - (void)openAccount:(id)sender { MbsOpenAccountEntry(); }
