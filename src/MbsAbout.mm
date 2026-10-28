@@ -44,7 +44,7 @@ static NSString *MbsApplicationVersion(void) {
         }
         NSButton *button = [NSButton buttonWithTitle:@"打开 GitHub" target:self action:@selector(openRepository:)];
         button.frame = NSMakeRect(300,20,126,32); button.bezelStyle = NSBezelStyleRounded; [view addSubview:button];
-        NSButton *repair=[NSButton buttonWithTitle:@"一键修复启动回调" target:self action:@selector(repairStartup:)];
+        NSButton *repair=[NSButton buttonWithTitle:@"启动离线功能" target:self action:@selector(repairStartup:)];
         repair.frame=NSMakeRect(24,20,192,32); repair.bezelStyle=NSBezelStyleRounded; [view addSubview:repair];
         [self.window center];
     }

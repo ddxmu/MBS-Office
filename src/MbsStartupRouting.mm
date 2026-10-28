@@ -252,30 +252,30 @@ static void MbsConfigureAutomaticRecovery(void) {
     BOOL recovered=NO;
     for (NSWindow *window in NSApp.windows.copy) recovered=MbsRecoverFailedLogin(window) || recovered;
     NSAlert *alert=[NSAlert new];
-    alert.messageText=@"修复启动回调";
+    alert.messageText=@"启用离线使用";
     if (recovered) {
-        alert.informativeText=@"已执行启动恢复回调，请返回文档检查工具栏。";
-    } else alert.informativeText=@"当前没有待处理的失败回调。点击首页刷新按钮仍可手动修复；若工具栏仍为灰色，可保存文档并正常重启。";
+        alert.informativeText=@"已执行离线启动，请返回文档检查工具栏。";
+    } else alert.informativeText=@"当前没有需要处理的启动任务。可点击首页按钮手动启动；若工具栏仍为灰色，请保存文档后正常重启。";
     if (MbsLastStartupRecovery) {
         NSDateFormatter *format=[NSDateFormatter new]; format.dateFormat=@"HH:mm:ss";
-        alert.informativeText=[NSString stringWithFormat:@"本次启动已完成 %u 次恢复回调，最近一次：%@。若工具栏仍为灰色，可保存文档并正常重启修复。",
+        alert.informativeText=[NSString stringWithFormat:@"本次启动已执行 %u 次，最近一次：%@。若工具栏仍为灰色，请保存文档后正常重启。",
             MbsLegacyStartupPromptCount(),[format stringFromDate:MbsLastStartupRecovery]];
     }
     NSView *settings=[[NSView alloc] initWithFrame:NSMakeRect(0,0,370,142)];
-    NSButton *automatic=[NSButton checkboxWithTitle:@"启用自动回调" target:nil action:nil];
+    NSButton *automatic=[NSButton checkboxWithTitle:@"启用离线使用" target:nil action:nil];
     automatic.frame=NSMakeRect(0,110,350,24);
     automatic.state=[MbsRecoveryDefaults() boolForKey:MbsRecoveryEnabledKey] ? NSControlStateValueOn : NSControlStateValueOff;
     [settings addSubview:automatic];
-    NSTextField *label=[NSTextField labelWithString:@"回调间隔"]; label.frame=NSMakeRect(0,75,80,22);
+    NSTextField *label=[NSTextField labelWithString:@"离线使用时间"]; label.frame=NSMakeRect(0,75,100,22);
     [settings addSubview:label];
-    NSTextField *value=[[NSTextField alloc] initWithFrame:NSMakeRect(86,72,110,26)];
+    NSTextField *value=[[NSTextField alloc] initWithFrame:NSMakeRect(106,72,110,26)];
     value.stringValue=[NSString stringWithFormat:@"%ld",(long)[MbsRecoveryDefaults() integerForKey:MbsRecoveryValueKey]];
-    value.accessibilityLabel=@"回调间隔数值"; [settings addSubview:value];
-    NSPopUpButton *unit=[[NSPopUpButton alloc] initWithFrame:NSMakeRect(206,71,100,28) pullsDown:NO];
+    value.accessibilityLabel=@"离线使用时间数值"; [settings addSubview:value];
+    NSPopUpButton *unit=[[NSPopUpButton alloc] initWithFrame:NSMakeRect(226,71,100,28) pullsDown:NO];
     [unit addItemsWithTitles:@[@"天",@"小时",@"分钟"]];
     [unit selectItemAtIndex:[MbsRecoveryDefaults() integerForKey:MbsRecoveryUnitKey]];
-    unit.accessibilityLabel=@"回调时间单位"; [settings addSubview:unit];
-    NSTextField *hint=[NSTextField wrappingLabelWithString:@"启用时先完成本次启动恢复，之后默认每 3 小时一次。关闭后仅手动修复；旧登录页仍会静默关闭。设置重启后保留。"];
+    unit.accessibilityLabel=@"离线使用时间单位"; [settings addSubview:unit];
+    NSTextField *hint=[NSTextField wrappingLabelWithString:@"开启后按设置的时间间隔自动执行，默认每 3 小时一次；关闭后可手动启动。设置重启后保留。"];
     hint.frame=NSMakeRect(0,2,370,60); hint.textColor=NSColor.secondaryLabelColor;
     [settings addSubview:hint]; alert.accessoryView=settings;
     [alert addButtonWithTitle:@"保存设置"];
@@ -333,9 +333,9 @@ void MbsShowStartupRepair(void) {
 static void MbsInstallRepairMenu(void) {
     NSMenu *help=[NSApp.mainMenu itemWithTitle:@"帮助"].submenu;
     if (!help) return;
-    NSMenuItem *existing=[help itemWithTitle:@"修复启动回调…"];
+    NSMenuItem *existing=[help itemWithTitle:@"启动离线功能…"];
     if (existing) { existing.enabled=YES; return; }
-    NSMenuItem *item=[[NSMenuItem alloc] initWithTitle:@"修复启动回调…" action:@selector(repair:) keyEquivalent:@""];
+    NSMenuItem *item=[[NSMenuItem alloc] initWithTitle:@"启动离线功能…" action:@selector(repair:) keyEquivalent:@""];
     item.target=MbsStartupRepairController.shared;
     [help addItem:item];
 }
@@ -376,7 +376,7 @@ static void MbsInstallHomeRepairButton(NSWindow *window) {
     NSButton *button=[NSButton buttonWithTitle:@"" target:MbsStartupRepairController.shared action:@selector(repair:)];
     button.tag=0x4d425352; button.bordered=NO;
     button.image=MbsStartupRepairIcon(); button.imageScaling=NSImageScaleProportionallyUpOrDown;
-    button.toolTip=@"一键修复启动回调"; button.accessibilityLabel=button.toolTip;
+    button.toolTip=@"启动离线功能"; button.accessibilityLabel=button.toolTip;
     // This is a child of the home window, anchored in its narrow left rail.
     button.frame=NSMakeRect(18,view.isFlipped ? NSHeight(view.bounds)-54 : 18,32,32);
     button.autoresizingMask=view.isFlipped ? NSViewMinYMargin : NSViewMaxYMargin;

@@ -58,7 +58,7 @@ int main(void) { @autoreleasepool {
         styleMask:NSWindowStyleMaskTitled backing:NSBackingStoreBuffered defer:NO];
     home.title=@"首页"; MbsInstallHomeRepairButton(home); MbsInstallHomeRepairButton(home);
     NSButton *repair=(NSButton *)[home.contentView viewWithTag:0x4d425352];
-    assert(repair && repair.image && !repair.hidden && [repair.accessibilityLabel isEqual:@"一键修复启动回调"]);
+    assert(repair && repair.image && !repair.hidden && [repair.accessibilityLabel isEqual:@"启动离线功能"]);
     assert(repair.frame.origin.x==18 && repair.frame.size.width==32);
     NSButton *documents=(NSButton *)[home.contentView viewWithTag:0x4d425344];
     NSButton *service=(NSButton *)[home.contentView viewWithTag:0x4d425345];
