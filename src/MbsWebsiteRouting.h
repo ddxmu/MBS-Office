@@ -1,6 +1,7 @@
 #import <Foundation/Foundation.h>
 
 static NSString *const MbsWebsiteHome = @"https://mbs.ddxmu.com/";
+static NSString *const MbsFeedbackURL = @"https://t.me/+uEp8JOn7Oic0MDdl";
 
 static BOOL MbsIsLegacyWebsiteHost(NSString *host) {
     NSString *value=host.lowercaseString;

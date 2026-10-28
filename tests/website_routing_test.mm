@@ -8,5 +8,6 @@ int main() { @autoreleasepool {
         assert(!MbsIsLegacyWebsiteURL([NSURL URLWithString:address]));
     }
     assert(!MbsIsLegacyWebsiteURL(nil));
+    assert([MbsFeedbackURL isEqualToString:@"https://t.me/+uEp8JOn7Oic0MDdl"]);
     puts("PASS built-in website host boundaries; Mbs services, local files and unrelated domains preserved");
 } }

@@ -2,6 +2,20 @@
 #import "MbsRecentDocuments.h"
 #import "MbsAccountEntry.h"
 #import "MbsWebSearch.h"
+#import "MbsWebsiteRouting.h"
+
+@interface MbsHomeFeedbackButton : NSButton
+@end
+@implementation MbsHomeFeedbackButton
+- (instancetype)initWithFrame:(NSRect)frame {
+    if (!(self=[super initWithFrame:frame])) return nil;
+    self.bordered=NO; self.transparent=YES; self.title=@"";
+    self.target=self; self.action=@selector(openFeedback:);
+    self.accessibilityLabel=@"意见反馈"; self.toolTip=@"意见反馈";
+    return self;
+}
+- (void)openFeedback:(id)sender { [NSWorkspace.sharedWorkspace openURL:[NSURL URLWithString:MbsFeedbackURL]]; }
+@end
 
 @interface MbsHomeSearchButton : NSButton
 @end
@@ -179,6 +193,16 @@ void MbsUpdateRecentHomeView(NSWindow *window) {
     const NSInteger tag=0x4d425352+100;
     MbsRecentHomeView *existing=(MbsRecentHomeView *)[content viewWithTag:tag];
     BOOL home=[window.title isEqualToString:@"首页"];
+    const NSInteger feedbackTag=0x4d425352+103;
+    MbsHomeFeedbackButton *feedback=(MbsHomeFeedbackButton *)[content viewWithTag:feedbackTag];
+    if (!feedback && home) {
+        feedback=[[MbsHomeFeedbackButton alloc] initWithFrame:NSMakeRect(MAX(0,NSWidth(content.bounds)-210),
+            content.isFlipped ? 52 : NSHeight(content.bounds)-84,34,32)];
+        feedback.tag=feedbackTag;
+        feedback.autoresizingMask=NSViewMinXMargin | (content.isFlipped ? NSViewMaxYMargin : NSViewMinYMargin);
+        [content addSubview:feedback positioned:NSWindowAbove relativeTo:nil];
+    }
+    feedback.hidden=!home;
     const NSInteger searchTag=0x4d425352+102;
     MbsHomeSearchButton *search=(MbsHomeSearchButton *)[content viewWithTag:searchTag];
     if (!search && home) {
