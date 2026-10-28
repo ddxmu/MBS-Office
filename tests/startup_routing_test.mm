@@ -38,6 +38,11 @@ static StartupNode *node(NSString *role, NSString *title) {
 int main(void) { @autoreleasepool {
     NSString *suite=[@"MbsStartupRoutingTest-" stringByAppendingString:NSUUID.UUID.UUIDString];
     MbsRecoveryPreferences=[[NSUserDefaults alloc] initWithSuiteName:suite];
+    assert(![MbsRecoveryDefaults() boolForKey:MbsRecoveryEnabledKey]);
+    assert(!MbsAutomaticRecoveryDue(NSDate.date));
+    MbsConfigureAutomaticRecovery(); assert(!MbsAutomaticRecoveryTimer);
+    [MbsRecoveryDefaults() setBool:YES forKey:MbsRecoveryEnabledKey];
+    assert([MbsRecoveryDefaults() boolForKey:MbsRecoveryEnabledKey]);
     StartupWindow *window=[StartupWindow new]; window.title=@"账号登录"; window.isVisible=YES;
     StartupNode *later=node(NSAccessibilityButtonRole,@"稍后登录");
     StartupNode *status=node(NSAccessibilityStaticTextRole,@"请输入账号和密码");
@@ -99,6 +104,8 @@ int main(void) { @autoreleasepool {
     [MbsRecoveryPreferences removePersistentDomainForName:suite];
     MbsInitialStartupRecovery=NO;
     assert(MbsSavedRecoveryInterval()==10800);
+    assert(![MbsRecoveryDefaults() boolForKey:MbsRecoveryEnabledKey]);
+    [MbsRecoveryDefaults() setBool:YES forKey:MbsRecoveryEnabledKey];
     assert(MbsRecoveryInterval(1,0)==86400 && MbsRecoveryInterval(3,1)==10800 && MbsRecoveryInterval(15,2)==900);
     assert(!MbsRecoveryInterval(0,1) && !MbsRecoveryInterval(-1,1) && !MbsRecoveryInterval(1,3));
     NSDate *now=NSDate.date;

@@ -20,7 +20,7 @@ static NSString *const MbsRecoveryUnitKey=@"MbsStartupRecoveryIntervalUnit";
 static NSString *const MbsRecoveryLastKey=@"MbsStartupRecoveryLastSuccess";
 static NSUserDefaults *MbsRecoveryDefaults(void) {
     if (!MbsRecoveryPreferences) MbsRecoveryPreferences=NSUserDefaults.standardUserDefaults;
-    [MbsRecoveryPreferences registerDefaults:@{MbsRecoveryEnabledKey:@YES,
+    [MbsRecoveryPreferences registerDefaults:@{MbsRecoveryEnabledKey:@NO,
         MbsRecoveryValueKey:@3,MbsRecoveryUnitKey:@1}];
     return MbsRecoveryPreferences;
 }
