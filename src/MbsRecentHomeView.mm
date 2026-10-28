@@ -1,6 +1,20 @@
 #import "MbsRecentHomeView.h"
 #import "MbsRecentDocuments.h"
 #import "MbsAccountEntry.h"
+#import "MbsWebSearch.h"
+
+@interface MbsHomeSearchButton : NSButton
+@end
+@implementation MbsHomeSearchButton
+- (instancetype)initWithFrame:(NSRect)frame {
+    if (!(self=[super initWithFrame:frame])) return nil;
+    self.bordered=NO; self.transparent=YES; self.title=@"";
+    self.target=self; self.action=@selector(openSearch:);
+    self.accessibilityLabel=@"搜索网页";
+    return self;
+}
+- (void)openSearch:(id)sender { MbsOpenWebSearch(); }
+@end
 
 @interface MbsHomeAccountButton : NSButton
 - (void)refreshAccount:(NSNotification *)notification;
@@ -165,6 +179,18 @@ void MbsUpdateRecentHomeView(NSWindow *window) {
     const NSInteger tag=0x4d425352+100;
     MbsRecentHomeView *existing=(MbsRecentHomeView *)[content viewWithTag:tag];
     BOOL home=[window.title isEqualToString:@"首页"];
+    const NSInteger searchTag=0x4d425352+102;
+    MbsHomeSearchButton *search=(MbsHomeSearchButton *)[content viewWithTag:searchTag];
+    if (!search && home) {
+        CGFloat width=NSWidth(content.bounds);
+        search=[[MbsHomeSearchButton alloc] initWithFrame:NSMakeRect(width*0.28,
+            content.isFlipped ? 48 : NSHeight(content.bounds)-88,width*0.43,40)];
+        search.tag=searchTag;
+        search.autoresizingMask=NSViewMinXMargin|NSViewWidthSizable|NSViewMaxXMargin|
+            (content.isFlipped ? NSViewMaxYMargin : NSViewMinYMargin);
+        [content addSubview:search positioned:NSWindowAbove relativeTo:nil];
+    }
+    search.hidden=!home;
     const NSInteger accountTag=0x4d425352+101;
     MbsHomeAccountButton *account=(MbsHomeAccountButton *)[content viewWithTag:accountTag];
     if (!account && home) {
