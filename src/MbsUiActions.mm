@@ -10,6 +10,9 @@
 #include <string.h>
 #include <dlfcn.h>
 #include <mach-o/dyld.h>
+#include <mach-o/loader.h>
+void MbsShowPdfConvert(int format, NSString *activePath);
+struct MbsQtPoint { int x,y; };
 
 namespace kso_qt {
 class __attribute__((visibility("hidden"))) QString {
@@ -55,8 +58,10 @@ void widgetSetVisibleOriginal(kso_qt::QWidget *,bool) __asm__("__ZN6kso_qt7QWidg
 void widgetShowOriginal(kso_qt::QWidget *) __asm__("__ZN6kso_qt7QWidget4showEv");
 void widgetToolTipOriginal(kso_qt::QWidget *,const kso_qt::QString &) __asm__("__ZN6kso_qt7QWidget10setToolTipERKNS_7QStringE");
 void toolButtonTextXOriginal(void *,const kso_qt::QString &) __asm__("__ZN11KToolButton8setTextXERKN6kso_qt7QStringE");
-struct MbsQtPoint { int x,y; };
 MbsQtPoint widgetMapToGlobal(const kso_qt::QWidget *,const MbsQtPoint &) __asm__("__ZNK6kso_qt7QWidget11mapToGlobalERKNS_6QPointE");
+void *pdfMenuItemAtPoint(const void *,const MbsQtPoint &) __asm__("__ZNK11KMenuWidget6itemAtERKN6kso_qt6QPointE");
+void *pdfMenuItemAtIndex(const void *,int) __asm__("__ZNK11KMenuWidget6itemAtEi");
+int pdfMenuItemCount(const void *) __asm__("__ZNK11KMenuWidget5countEv");
 void nativeColorCtor(void *,unsigned) __asm__("__ZN6kso_qt6QColorC1Ej");
 void nativeDrawTextOriginal(void *,const void *,const kso_qt::QString &,int,const void *,const kso_qt::QString &,const void *,int,const kso_qt::QString &,const void *,const void *,const double &,int) __asm__("__ZN11KDrawHelper8drawTextEPN6kso_qt8QPainterERKNS0_5QRectERKNS0_7QStringEiRKNS0_5QFontES8_PKNS0_12QStyleOptionENS0_2Qt13TextElideModeES8_RKNS_18KDrawTextColorArgsERKNS0_6QColorERKdi");
 void buttonMouseReleaseOriginal(kso_qt::QAbstractButton*,kso_qt::QMouseEvent*) __asm__("__ZN6kso_qt15QAbstractButton17mouseReleaseEventEPNS_11QMouseEventE");
@@ -353,8 +358,21 @@ static BOOL MbsSuppressLegacyAccountHover(kso_qt::QObject *receiver,unsigned sho
     }
     return NO;
 }
+static void MbsOpenPdfImageWindow(void);
 static bool routeClick(kso_qt::QObject*receiver,kso_qt::QEvent*event) {
     unsigned short type=0;if(event)memcpy(&type,(char*)event+16,2);
+    if ((type==2 || type==3) && NSThread.isMainThread) {
+        kso_qt::QObject *object=receiver;
+        for (int depth=0;object && depth<7;++depth) {
+            if ([property(object,"text") isEqualToString:@"输出为图片"] && ![className(object) isEqualToString:@"KMenuWidget"]) {
+                if (type==3) MbsOpenPdfImageWindow();
+                return true;
+            }
+            void *data=nullptr; memcpy(&data,(char *)object+8,8);
+            auto *parent=data ? *(kso_qt::QObject **)((char *)data+16) : nullptr;
+            if (parent==object) break; object=parent;
+        }
+    }
     if (type==17 && NSThread.isMainThread) {
         auto finish=(void (*)(void *))dlsym(RTLD_DEFAULT,"MbsScheduleNativeLegacyLogin");
         if (finish) finish(receiver);
@@ -489,12 +507,88 @@ __attribute__((used,section("__DATA,__interpose"))) static const Interpose actio
 static id MbsLoginMouseMonitor;
 static __weak NSWindow *MbsLoginPressedWindow;
 static NSRect MbsLoginPressedFrame;
+static NSString *MbsActivePdfPath(kso_qt::WidgetListData *list, NSString *nativeTitle) {
+    if (!nativeTitle.length) return nil;
+    NSString *activePath=nil;
+    const unsigned char uuid[]={0xe4,0x0f,0x0d,0x76,0x8d,0x0d,0x3d,0xc8,0xbf,0xed,0xd8,0xa9,0xa3,0x01,0x74,0x0a};
+    const unsigned char signature[]={0xff,0x03,0x01,0xd1,0xf4,0x4f,0x02,0xa9,0xfd,0x7b,0x03,0xa9,0xfd,0xc3,0x00,0x91};
+    for (uint32_t n=0;n<_dyld_image_count();++n) {
+        const char *name=_dyld_get_image_name(n);
+        if (!name || !strstr(name,"/kshell.framework/") || strcmp(strrchr(name,'/')+1,"kshell")) continue;
+        const auto *h=(const mach_header_64 *)_dyld_get_image_header(n);
+        if (!h || h->magic!=MH_MAGIC_64 || h->ncmds>128) continue;
+        const uint8_t *c=(const uint8_t *)(h+1),*end=c+h->sizeofcmds; BOOL match=NO;
+        for (uint32_t k=0;k<h->ncmds && c+sizeof(load_command)<=end;k++) {
+            const auto *lc=(const load_command *)c;
+            if (lc->cmdsize<sizeof(load_command) || lc->cmdsize>(size_t)(end-c)) break;
+            if (lc->cmd==LC_UUID && lc->cmdsize>=sizeof(uuid_command)) match=!memcmp(((const uuid_command *)lc)->uuid,uuid,sizeof(uuid));
+            c+=lc->cmdsize;
+        }
+        if (!match || memcmp((const uint8_t *)h+0x6e7a54,signature,sizeof(signature))) continue;
+        auto *meta=(const kso_qt::QMetaObject *)((const uint8_t *)h+0x1323490);
+        for (int j=list->begin;j<list->end;++j) {
+            auto *window=meta->cast(list->items[j]);
+            if (!window || ![property(window,"visible") isEqualToString:@"true"]) continue;
+            NSString *qtTitle=property(window,"windowTitle");
+            if (![qtTitle isEqualToString:nativeTitle] && ![qtTitle hasPrefix:[nativeTitle stringByAppendingString:@" - "]]) continue;
+            auto getter=(kso_qt::QString (*)(void *))((const uint8_t *)h+0x6e7a54);
+            auto value=getter(window); activePath=read(value);
+            break;
+        }
+        break;
+    }
+    return activePath;
+}
+static void MbsOpenPdfImageWindow(void) {
+    auto widgets=kso_qt::QApplication::allWidgets();
+    NSString *title=NSApp.currentEvent.window.title ?: NSApp.mainWindow.title;
+    MbsShowPdfConvert(4,MbsActivePdfPath(widgets.data,title));
+}
+static BOOL MbsHandlePdfMenuClick(NSEvent *event) {
+    if (event.type!=NSEventTypeLeftMouseUp || !event.window) return NO;
+    NSPoint point=[event.window convertPointToScreen:event.locationInWindow];
+    auto widgets=kso_qt::QApplication::allWidgets(); auto *list=widgets.data;
+    for (int i=list->begin;i<list->end;++i) {
+        auto *widget=list->items[i];
+        NSString *label=property(widget,"text");
+        if (![property(widget,"visible") isEqualToString:@"true"] ||
+            (![label isEqualToString:@"PDF转换"] && ![label isEqualToString:@"输出为图片"])) continue;
+        if ([className(widget) isEqualToString:@"KMenuWidget"]) continue;
+        int width=widget->property("width").toInt(), height=widget->property("height").toInt();
+        if (width<35 || width>200 || height<35 || height>120) continue;
+        MbsQtPoint origin=widgetMapToGlobal(widget,{0,0});
+        int x=(int)point.x-origin.x, y=(int)(NSMaxY(NSScreen.screens.firstObject.frame)-point.y)-origin.y;
+        if (x<0 || x>=width || y<0 || y>=height/2) continue;
+        MbsShowPdfConvert([label isEqualToString:@"输出为图片"] ? 4 : 0,MbsActivePdfPath(list,event.window.title));
+        return YES;
+    }
+    for (int i=list->begin;i<list->end;++i) {
+        auto *widget=list->items[i];
+        if (![className(widget) isEqualToString:@"KMenuWidget"] ||
+            ![property(widget,"text") isEqualToString:@"PDF转换"] ||
+            ![property(widget,"visible") isEqualToString:@"true"]) continue;
+        MbsQtPoint origin=widgetMapToGlobal(widget,{0,0});
+        MbsQtPoint local={(int)point.x-origin.x,(int)(NSMaxY(NSScreen.screens.firstObject.frame)-point.y)-origin.y};
+        void *item=pdfMenuItemAtPoint(widget,local);
+        if (pdfMenuItemCount(widget)<4) continue;
+        if (!item) continue;
+        for (int index=0;index<4;++index) {
+            if (pdfMenuItemAtIndex(widget,index)==item) {
+                NSString *activePath=MbsActivePdfPath(list,NSApp.mainWindow.title);
+                MbsShowPdfConvert(index,activePath);
+                return NO;
+            }
+        }
+    }
+    return NO;
+}
 static void InstallMbsLoginMouseMonitor(void) {
     dispatch_async(dispatch_get_main_queue(), ^{
         if (MbsLoginMouseMonitor) return;
         MbsLoginMouseMonitor = [NSEvent addLocalMonitorForEventsMatchingMask:(NSEventMaskLeftMouseDown | NSEventMaskLeftMouseUp) handler:^NSEvent *(NSEvent *event) {
             NSWindow *window=event.window;
             NSPoint point=event.locationInWindow;
+            if (MbsHandlePdfMenuClick(event)) return nil;
             if (event.type == NSEventTypeLeftMouseDown) {
                 MbsLoginPressedWindow = nil;
                 if (window.isVisible && window.contentView) {

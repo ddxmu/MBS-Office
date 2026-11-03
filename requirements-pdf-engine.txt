@@ -1,0 +1,7 @@
+pyinstaller==6.16.0
+setuptools<81
+pdf2docx==0.5.13
+PyMuPDF==1.27.2.3
+pdfplumber==0.11.9
+openpyxl==3.1.5
+python-docx==1.1.0
